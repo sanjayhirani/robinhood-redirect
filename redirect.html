@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<script>
+const urlParams = new URLSearchParams(window.location.search);
+const symbol = urlParams.get('symbol');
+const strike = urlParams.get('strike');
+const exp = urlParams.get('exp');
+const type = urlParams.get('type') || 'put';
+if(symbol && strike && exp){
+    window.location.href = `robinhood://options/${symbol}?expirationDate=${exp}&strikePrice=${strike}&optionType=${type}`;
+} else {
+    document.body.innerHTML = "Missing parameters!";
+}
+</script>
+</head>
+<body>
+Redirecting to Robinhood option...
+</body>
+</html>
