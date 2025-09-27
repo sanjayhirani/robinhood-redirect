@@ -1,0 +1,214 @@
+# -------------------- IMPORTS --------------------
+import robin_stocks.robinhood as r
+from datetime import datetime
+import requests
+import os
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import io
+from math import log, sqrt
+from scipy.stats import norm
+import numpy as np
+import pandas as pd
+
+# -------------------- CONFIG --------------------
+TICKERS = ["TLRY", "PLUG", "BITF", "BBAI", "SPCE", "ONDS", "GRAB", "LUMN", "RIG", "BB", "HTZ", "RXRX", "CLOV", "RZLV", "NVTS", "RR"]
+NUM_EXPIRATIONS = 3
+NUM_PUTS = 2
+PRICE_ADJUST = 0.01
+RISK_FREE_RATE = 0.05
+MIN_PRICE = 0.15
+HV_PERIOD = 21
+CANDLE_WIDTH = 0.6
+LOW_DAYS = 14
+
+# -------------------- FUNCTIONS --------------------
+def black_scholes_put_delta(S, K, T, r, sigma):
+    if sigma <= 0 or T <= 0: return -1.0
+    d1 = (log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt(T))
+    return norm.cdf(d1) - 1
+
+def risk_emoji(prob_otm):
+    if prob_otm >= 0.8: return "✅"
+    elif prob_otm >= 0.6: return "🟡"
+    else: return "⚠️"
+
+def historical_volatility(prices, period=21):
+    prices = np.array(prices)
+    log_returns = np.diff(np.log(prices))
+    if len(log_returns) < period:
+        return 0.3
+    rolling_std = np.std(log_returns[-period:])
+    return rolling_std * np.sqrt(252)
+
+# -------------------- LOGIN --------------------
+USERNAME = os.getenv("RH_USERNAME")
+PASSWORD = os.getenv("RH_PASSWORD")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+r.login(USERNAME, PASSWORD)
+today = datetime.now().date()
+all_options = []
+
+# -------------------- SCAN TICKERS --------------------
+for TICKER in TICKERS:
+    try:
+        current_price = float(r.stocks.get_latest_price(TICKER)[0])
+        rh_url = f"https://robinhood.com/stocks/{TICKER}"
+
+        # ---------------- HISTORICAL DATA ----------------
+        historicals = r.stocks.get_stock_historicals(TICKER, interval='day', span='month', bounds='regular')
+        df = pd.DataFrame(historicals)
+        df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
+        df.set_index('begins_at', inplace=True)
+        df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
+        df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
+        all_days = pd.date_range(start=df.index.min(), end=df.index.max(), freq='B')
+        df = df.reindex(all_days)
+        df.index = df.index.tz_localize(None)
+        df['close'] = df['close'].ffill()
+        df['open'] = df['open'].fillna(df['close'])
+        df['high'] = df['high'].fillna(df[['open','close']].max(axis=1))
+        df['low'] = df['low'].fillna(df[['open','close']].min(axis=1))
+        df['volume'] = df['volume'].fillna(0)
+
+        # ---------------- DIVIDENDS & EARNINGS ----------------
+        try:
+            dividends = r.stocks.get_dividends(TICKER)
+            earnings = r.stocks.get_earnings(TICKER)
+        except:
+            dividends = []
+            earnings = []
+
+        div_dates = []
+        for div in dividends:
+            try:
+                div_date = pd.to_datetime(div.get('payable_date') or div.get('ex_date')).date()
+                div_dates.append(div_date)
+            except:
+                continue
+
+        earn_dates = []
+        for e in earnings:
+            try:
+                report_date = pd.to_datetime(e.get('report_date')).date()
+                earn_dates.append(report_date)
+            except:
+                continue
+
+        # ---------------- OPTIONS ----------------
+        all_puts = r.options.find_tradable_options(TICKER, optionType="put")
+        exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))[:NUM_EXPIRATIONS]
+        candidate_puts = []
+        sigma = historical_volatility(df['close'].values, HV_PERIOD)
+
+        for exp_date in exp_dates:
+            exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
+            T = max((exp_date_obj - today).days / 365, 1/365)
+            puts_for_exp = [opt for opt in all_puts if opt['expiration_date'] == exp_date]
+
+            for opt in puts_for_exp:
+                strike = float(opt['strike_price'])
+                if strike >= current_price:
+                    continue  # Skip ITM
+
+                # Dividend filter
+                if any(today <= div_date <= exp_date_obj for div_date in div_dates):
+                    continue
+
+                # Earnings filter
+                if any(today <= earn_date <= exp_date_obj for earn_date in earn_dates):
+                    continue
+
+                option_id = opt['id']
+                market_data = r.options.get_option_market_data_by_id(option_id)
+                price, delta = 0.0, -1.0
+                if market_data:
+                    try:
+                        price = float(market_data[0].get('adjusted_mark_price') or market_data[0].get('mark_price') or 0.0)
+                    except:
+                        price = 0.0
+                    try:
+                        delta = float(market_data[0].get('delta')) if market_data[0].get('delta') else None
+                    except:
+                        delta = None
+                    if delta is None or delta == 0.0:
+                        delta = black_scholes_put_delta(current_price, strike, T, RISK_FREE_RATE, sigma)
+
+                price = max(price - PRICE_ADJUST, 0.0)
+                if price >= MIN_PRICE:
+                    prob_OTM = 1 - abs(delta)
+                    candidate_puts.append({
+                        "Ticker": TICKER,
+                        "Current Price": current_price,
+                        "Expiration Date": exp_date,
+                        "Strike Price": strike,
+                        "Option Price": price,
+                        "Delta": delta,
+                        "Prob OTM": prob_OTM,
+                        "URL": rh_url
+                    })
+
+        # ---------------- SELECT BEST PUTS ----------------
+        selected_puts = []
+        for opt in sorted(candidate_puts, key=lambda x:x['Prob OTM'], reverse=True):
+            if len(selected_puts) >= NUM_PUTS:
+                break
+            if opt['Option Price'] >= MIN_PRICE:
+                selected_puts.append(opt)
+
+        all_options.extend(selected_puts)
+
+        # ---------------- TELEGRAM MESSAGE ----------------
+        msg_lines = [f"📊 <a href='{rh_url}'>{TICKER}</a> current: 💲{current_price:.2f}"]
+        if selected_puts:
+            for opt in selected_puts:
+                msg_lines.append(f"{risk_emoji(opt['Prob OTM'])} Exp: {opt['Expiration Date']} Strike: {opt['Strike Price']} Price: ${opt['Option Price']:.2f} Prob OTM: {opt['Prob OTM']*100:.1f}%")
+        else:
+            msg_lines.append(f"⚠️ No puts matched criteria for {TICKER}")
+
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": "\n".join(msg_lines)}
+        )
+
+    except Exception as e:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": f"⚠️ Error processing {TICKER}: {e}"}
+        )
+
+# -------------------- BEST OPTION ALERT --------------------
+if all_options:
+    # Only safe options (dividend/earnings filtered)
+    best = max(all_options, key=lambda x:x['Prob OTM'])
+    best_ticker = best['Ticker']
+    rh_url = best['URL']
+    current_price = best['Current Price']
+    strike_price = best['Strike Price']
+    exp_date = best['Expiration Date']
+    option_price = best['Option Price']
+    delta = best['Delta']
+    prob_otm = best['Prob OTM']
+
+    # Compute premium/risk
+    premium_risk = option_price / max(current_price - strike_price, 0.01)
+
+    # Telegram message
+    msg_lines = [
+        f"🔥 <b>Best Option to Sell (Filtered)</b>:",
+        f"📊 <a href='{rh_url}'>{best_ticker}</a> current: 💲{current_price:.2f}",
+        f"✅ Expiration : {exp_date}",
+        f"💲 Strike    : {strike_price}",
+        f"💰 Price     : ${option_price:.2f}",
+        f"🔺 Delta     : {delta:.3f}",
+        f"🎯 Prob OTM  : {prob_otm*100:.1f}%",
+        f"💎 Premium/Risk: {premium_risk:.2f}",
+        f"⚠️ Dividends/Earnings during option period filtered out"
+    ]
+
+    requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        data={"chat_id": TELEGRAM_CHAT_ID, "text": "\n".join(msg_lines), "parse_mode":"HTML"}
+    )
