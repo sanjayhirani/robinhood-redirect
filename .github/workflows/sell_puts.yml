@@ -2,6 +2,7 @@ name: Robinhood Sell Puts Scanner
 
 # Schedule: Every Monday at 11:30 AM ET (15:30 UTC)
 on:
+workflow_dispatch:  # <-- allows manual runs from GitHub web
   schedule:
     - cron: '30 15 * * 1'
 
