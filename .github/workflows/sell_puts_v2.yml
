@@ -1,4 +1,4 @@
-name: Robinhood Sell Puts Scanner V2
+name: Robinhood Sell Puts Scanner Test
 
 on:
   workflow_dispatch:   # manual runs
