@@ -21,10 +21,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install robin_stocks pandas matplotlib numpy scipy requests
 
-      - name: Run Robinhood Sell Puts Scanner
+      - name: Run Robinhood Options Scanner
         env:
           RH_USERNAME: ${{ secrets.RH_USERNAME }}
           RH_PASSWORD: ${{ secrets.RH_PASSWORD }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python robinhood_sell_puts_chart.py
+        run: python robinhood_options_manager.py
