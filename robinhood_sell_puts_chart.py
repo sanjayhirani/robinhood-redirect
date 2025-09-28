@@ -1,4 +1,4 @@
-# robinhood_sell_puts_with_risk_fixed.py
+# robinhood_sell_puts_with_risk_corrected.py
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 import sys
@@ -226,8 +226,16 @@ for TICKER in safe_tickers:  # only safe tickers
             puts_for_exp = [opt for opt in all_puts if opt['expiration_date'] == exp_date]
 
             for opt in puts_for_exp:
-                strike = float(opt['strike_price'])
-                if strike >= current_price: continue
+                # Ensure strike is a valid float and reasonable
+                try:
+                    strike = float(opt['strike_price'])
+                except:
+                    continue
+                if strike >= current_price:
+                    continue  # skip ITM puts
+                if strike < 0.1 * current_price:
+                    continue  # skip absurdly low strikes
+
                 option_id = opt['id']
                 market_data = r.options.get_option_market_data_by_id(option_id)
 
@@ -245,12 +253,12 @@ for TICKER in safe_tickers:  # only safe tickers
                         delta = black_scholes_put_delta(current_price, strike, T, RISK_FREE_RATE, sigma)
 
                 premium_risk = price / max(current_price - strike, 0.01)
-                if price>=MIN_PRICE and premium_risk>=MIN_PREMIUM_RISK:
+                if price >= MIN_PRICE and premium_risk >= MIN_PREMIUM_RISK:
                     prob_OTM = 1 - abs(delta)
                     candidate_puts.append({
                         "Ticker": TICKER, "Current Price": current_price, "Expiration Date": exp_date,
-                        "Strike Price": strike, "Option Price": price, "Delta": delta, "Prob OTM": prob_OTM,
-                        "Premium/Risk": premium_risk, "URL": rh_url
+                        "Strike Price": strike, "Option Price": price, "Delta": delta,
+                        "Prob OTM": prob_OTM, "Premium/Risk": premium_risk, "URL": rh_url
                     })
 
         selected_puts = sorted(candidate_puts, key=lambda x:x['Prob OTM'], reverse=True)[:NUM_PUTS]
