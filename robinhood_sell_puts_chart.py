@@ -1,7 +1,7 @@
-# robinhood_puts_playwright_full.py
+# robinhood_puts_headless.py
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
-import sys, subprocess
+import sys, subprocess, os
 
 def install(pkg):
     subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
@@ -16,14 +16,14 @@ for pkg in ["yfinance", "pandas", "matplotlib", "numpy", "requests", "playwright
 subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
 
 # ------------------ IMPORTS ------------------
-import os, io, asyncio
+import asyncio, io
 from datetime import datetime, timedelta
-import requests
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import numpy as np
 import yfinance
+import requests
 from playwright.async_api import async_playwright
 
 # ------------------ CONFIG ------------------
@@ -37,8 +37,9 @@ BEST_MIN_PRICE = 0.1
 CANDLE_WIDTH = 0.6
 
 # ------------------ SECRETS ------------------
-USERNAME = os.environ["RH_USERNAME"]
-PASSWORD = os.environ["RH_PASSWORD"]
+RH_USERNAME = os.environ["RH_USERNAME"]
+RH_PASSWORD = os.environ["RH_PASSWORD"]
+RH_SESSION = os.environ.get("RH_SESSION")  # optional pre-saved session token
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
@@ -94,7 +95,7 @@ def plot_candlestick(df, current_price, last_14_low, strike_price=None, exp_date
 # ------------------ SCRAPER ------------------
 async def scrape_option_data(page, ticker):
     await page.goto(f"https://robinhood.com/stocks/{ticker}/options")
-    await page.wait_for_timeout(5000)  # wait page load
+    await page.wait_for_timeout(5000)
     rows = await page.query_selector_all("div[class*='optionsRow']")
     results = []
     for row in rows:
@@ -110,6 +111,7 @@ async def scrape_option_data(page, ticker):
             prob_otm = int(float((await cop_text.inner_text()).replace('%','')) if cop_text else 0)
             exp_date = datetime.strptime(await exp_text.inner_text(), "%m/%d/%y").date() if exp_text else None
             results.append({
+                "Ticker": ticker,
                 "Strike": strike, "Ask": ask, "Delta": delta, "Prob OTM": prob_otm, "Expiration": exp_date
             })
         except:
@@ -122,7 +124,7 @@ async def main():
     cutoff = today + timedelta(days=30)
     safe_tickers, risky_msgs, all_options = [], [], []
 
-    # Earnings/Dividend alerts
+    # ------------------ EARNINGS/DIVIDEND ALERT ------------------
     for ticker in TICKERS:
         try:
             stock = yfinance.Ticker(ticker)
@@ -150,7 +152,6 @@ async def main():
         except:
             risky_msgs.append(f"⚠️ <b>{ticker}</b> error")
 
-    # Send summary
     summary_lines = []
     summary_lines.append("⚠️ <b>Risky Tickers</b>\n"+"\n".join(risky_msgs) if risky_msgs else "⚠️ <b>No risky tickers found 🎉</b>")
     safe_bold = [f"<b>{t}</b>" for t in sorted(safe_tickers)]
@@ -159,48 +160,71 @@ async def main():
         summary_lines.append("✅ <b>Safe Tickers</b>\n"+"\n".join(safe_rows))
     send_telegram_message("\n".join(summary_lines))
 
-    # Launch Playwright
+    # ------------------ OPTIONS ALERTS ------------------
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         page = await browser.new_page()
-        await page.goto("https://robinhood.com/login")
-        await page.fill("input[name='username']", USERNAME)
-        await page.fill("input[name='password']", PASSWORD)
-        await page.click("button[type='submit']")
-        await page.wait_for_timeout(10000)  # handle 2FA manually if needed
 
-        # Individual ticker alerts
+        # Use session if available
+        if RH_SESSION:
+            await page.context.add_cookies([{"name":"session","value":RH_SESSION,"domain":".robinhood.com"}])
+            await page.goto("https://robinhood.com/stocks")
+            await page.wait_for_timeout(5000)
+        else:
+            # normal login
+            await page.goto("https://robinhood.com/login")
+            await page.fill("input[name='username']", RH_USERNAME)
+            await page.fill("input[name='password']", RH_PASSWORD)
+            await page.click("button[type='submit']")
+            await page.wait_for_timeout(10000)  # handle 2FA manually once
+
+        # Process tickers
         for ticker in safe_tickers:
-            options = await scrape_option_data(page, ticker)
-            hist = yfinance.Ticker(ticker).history(period="1mo")
-            current_price = float(hist['Close'][-1])
-            last_14_low = hist['Low'][-LOW_DAYS:].min()
-            valid_puts = [opt for opt in options if opt["Strike"] < current_price and 0 <= (opt["Expiration"]-today).days <= MAX_EXP_DAYS]
-            valid_puts.sort(key=lambda x: x["Strike"], reverse=True)
-            top_puts = valid_puts[:3]
-            # Telegram messages: top 2 options
-            buf = plot_candlestick(hist, current_price, last_14_low)
-            msg_lines = [f"📊 <a href='https://robinhood.com/stocks/{ticker}'>{ticker}</a> current: ${current_price:.2f}"]
-            for opt in top_puts[:2]:
-                msg_lines.append(f"{risk_emoji(opt['Prob OTM'])} 📅 Exp: {opt['Expiration'].strftime('%d-%m-%y')}")
-                msg_lines.append(f"💲 Strike: ${opt['Strike']}")
-                msg_lines.append(f"💰 Price: ${opt['Ask']:.2f}")
-                msg_lines.append(f"🔺 Delta: {opt['Delta']:.3f}")
-                msg_lines.append(f"🎯 Prob: {opt['Prob OTM']}%\n")
-                all_options.append(opt)
-            send_telegram_photo(buf, "\n".join(msg_lines))
+            try:
+                options = await scrape_option_data(page, ticker)
+                hist = yfinance.T
+                hist = yfinance.Ticker(ticker).history(period="1mo")
+                current_price = float(hist['Close'][-1])
+                last_14_low = hist['Low'][-LOW_DAYS:].min()
+                month_high = hist['Close'].max()
+                month_low = hist['Close'].min()
+                
+                # Filter valid puts: under current price, max 21 days
+                valid_puts = [opt for opt in options if opt["Strike"] < current_price and 0 <= (opt["Expiration"]-today).days <= MAX_EXP_DAYS]
+                valid_puts.sort(key=lambda x: x["Strike"], reverse=True)
+                top_puts = valid_puts[:3]
 
-        # Best option alert
-        best_options = [opt for opt in all_options if opt["Ask"] >= BEST_MIN_PRICE and opt["Prob OTM"]>=80]
+                # Build Telegram message top 2
+                buf = plot_candlestick(hist, current_price, last_14_low)
+                msg_lines = [
+                    f"📊 <a href='https://robinhood.com/stocks/{ticker}'>{ticker}</a> current: ${current_price:.2f}",
+                    f"💹 1M High: ${month_high:.2f}", f"📉 1M Low: ${month_low:.2f}"
+                ]
+                for opt in top_puts[:2]:
+                    msg_lines.append(f"{risk_emoji(opt['Prob OTM'])} 📅 Exp: {opt['Expiration'].strftime('%d-%m-%y')}")
+                    msg_lines.append(f"💲 Strike: ${opt['Strike']}")
+                    msg_lines.append(f"💰 Price: ${opt['Ask']:.2f}")
+                    msg_lines.append(f"🔺 Delta: {opt['Delta']:.3f}")
+                    msg_lines.append(f"🎯 Prob: {opt['Prob OTM']}%")
+                    all_options.append(opt)
+
+                send_telegram_photo(buf, "\n".join(msg_lines))
+            except:
+                send_telegram_message(f"⚠️ Error processing {ticker}")
+
+        # ------------------ BEST ALERT ------------------
+        best_options = [opt for opt in all_options if opt["Ask"] >= BEST_MIN_PRICE and opt["Prob OTM"] >= 80]
         if not best_options and all_options:
-            best_options = all_options  # fallback if none meet criteria
+            best_options = all_options  # fallback
         if best_options:
             best = max(best_options, key=lambda x: x["Prob OTM"])
-            hist = yfinance.Ticker(ticker).history(period="1mo")
-            buf = plot_candlestick(hist, best['Strike'], last_14_low, best['Strike'], best['Expiration'])
+            hist = yfinance.Ticker(best['Ticker']).history(period="1mo")
+            current_price = float(hist['Close'][-1])
+            last_14_low = hist['Low'][-LOW_DAYS:].min()
+            buf = plot_candlestick(hist, current_price, last_14_low, best['Strike'], best['Expiration'])
             msg_lines = [
                 "🔥 <b>Best Option to Sell</b>:",
-                f"📊 <a href='https://robinhood.com/stocks/{ticker}'>{ticker}</a> current: ${current_price:.2f}",
+                f"📊 <a href='https://robinhood.com/stocks/{best['Ticker']}'>{best['Ticker']}</a> current: ${current_price:.2f}",
                 f"✅ Expiration: {best['Expiration'].strftime('%d-%m-%y')}",
                 f"💲 Strike: ${best['Strike']}",
                 f"💰 Price: ${best['Ask']:.2f}",
@@ -208,6 +232,7 @@ async def main():
                 f"🎯 Prob OTM: {best['Prob OTM']}%"
             ]
             send_telegram_photo(buf, "\n".join(msg_lines))
+
         await browser.close()
 
 # Run
