@@ -82,7 +82,7 @@ def send_telegram_message(msg):
         data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     )
 
-def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_date=None):
+def plot_candlestick(df, current_price, last_30_high, selected_strikes=None, exp_date=None):
     fig, ax = plt.subplots(figsize=(12,6))
     fig.patch.set_facecolor('black')
     ax.set_facecolor('black')
@@ -97,7 +97,7 @@ def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_
         ax.plot([mdates.date2num(df.index[i]), mdates.date2num(df.index[i])],
                  [df['low'].iloc[i], df['high'].iloc[i]], color=color, linewidth=1)
     ax.axhline(current_price, color='magenta', linestyle='--', linewidth=1.5, label=f'Current: ${current_price:.2f}')
-    ax.axhline(last_14_low, color='yellow', linestyle='--', linewidth=2, label=f'14-day Low: ${last_14_low:.2f}')
+    ax.axhline(last_30_high, color='yellow', linestyle='--', linewidth=2, label=f'1M High: ${last_30_high:.2f}')
     
     if selected_strikes:
         for strike in selected_strikes:
@@ -140,7 +140,6 @@ if TEST_MODE:
     summary_lines = ["✅ <b>Safe Tickers</b>\n<b>OPEN</b>", "\n📊 Summary: ✅ Safe: 1 | ⚠️ Risky: 0"]
     send_telegram_message("\n".join(summary_lines))
 else:
-    # Normal ownership fetch
     owned_positions = r.account.get_open_stock_positions()
     tickers_owned_100 = []
     for pos in owned_positions:
@@ -148,6 +147,7 @@ else:
         if quantity == 100:
             instrument_data = r.stocks.get_instrument_by_url(pos['instrument'])
             tickers_owned_100.append(instrument_data['symbol'].upper())
+    safe_tickers = tickers_owned_100
 
 # ------------------ PART 2: ROBINHOOD COVERED CALLS ------------------
 all_options = []
@@ -173,9 +173,9 @@ for TICKER in safe_tickers:
 
         month_high = df['close'].max()
         month_low = df['close'].min()
-        last_14_low = df['low'][-LOW_DAYS:].min()
-        distance_from_low = current_price - month_low
-        distance_pct = distance_from_low / month_low
+        last_30_high = df['high'][-LOW_DAYS:].max()
+        distance_from_high = month_high - current_price
+        distance_pct = distance_from_high / month_high
         proximity = "🔺 Closer to 1M High" if abs(current_price - month_high) < abs(current_price - month_low) else "🔻 Closer to 1M Low"
 
         all_calls = r.options.find_tradable_options(TICKER, optionType="call")
@@ -218,7 +218,8 @@ for TICKER in safe_tickers:
                         "Ticker": TICKER, "Current Price": current_price, "Expiration Date": exp_date,
                         "Strike Price": strike, "Option Price": price, "Delta": delta,
                         "Prob OTM": prob_OTM, "Profit/Risk": profit_risk, "URL": rh_url,
-                        "Month Low": month_low, "Distance From Low $": distance_from_low, "Distance From Low %": distance_pct
+                        "Month High": month_high, "Distance From High $": distance_from_high,
+                        "Distance From High %": distance_pct
                     })
 
         selected_calls = sorted(candidate_calls, key=lambda x:x['Profit/Risk'], reverse=True)[:NUM_CALLS]
@@ -237,9 +238,9 @@ for TICKER in safe_tickers:
             msg_lines.append(f"🔺 Delta : {opt['Delta']:.3f}")
             msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%")
             msg_lines.append(f"💎 Premium/Risk: {opt['Profit/Risk']:.2f}")
-            msg_lines.append(f"📉 Dist. from 1M Low: {opt['Distance From Low %']*100:.1f}%\n")
+            msg_lines.append(f"📉 Dist. from 1M High: {opt['Distance From High %']*100:.1f}%\n")
 
-        buf = plot_candlestick(df, current_price, last_14_low, selected_strikes)
+        buf = plot_candlestick(df, current_price, last_30_high, selected_strikes)
         send_telegram_photo(buf, "\n".join(msg_lines))
 
     except Exception as e:
@@ -247,7 +248,7 @@ for TICKER in safe_tickers:
 
 # ------------------ BEST OPTION ALERT ------------------
 if all_options:
-    best = max(all_options, key=lambda x: (x['Profit/Risk'], x['Distance From Low %']))
+    best = max(all_options, key=lambda x: (x['Profit/Risk'], x['Distance From High %']))
     premium_risk = best['Profit/Risk']
 
     msg_lines = [
@@ -259,8 +260,8 @@ if all_options:
         f"🔺 Delta     : {best['Delta']:.3f}",
         f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
         f"💎 Premium/Risk: {premium_risk:.2f}",
-        f"📉 Dist. from 1M Low: {best['Distance From Low %']*100:.1f}%"
+        f"📉 Dist. from 1M High: {best['Distance From High %']*100:.1f}%"
     ]
 
-    buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
+    buf = plot_candlestick(df, best['Current Price'], last_30_high, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
