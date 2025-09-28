@@ -110,7 +110,7 @@ def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_
         exp_date_obj = pd.to_datetime(exp_date).tz_localize(None)
         if df.index.min() <= exp_date_obj <= df.index.max():
             ax.axvline(mdates.date2num(exp_date_obj), color='orange', linestyle='--', linewidth=2, label=f'Expiration: {exp_date_obj.strftime("%d-%m-%y")}')
-    
+
     ax.set_ylabel('Price ($)', color='white')
     ax.tick_params(colors='white')
     ax.grid(True, color='gray', linestyle='--', alpha=0.3)
@@ -140,6 +140,28 @@ def get_owned_tickers():
 
 owned_tickers = get_owned_tickers()
 safe_tickers = [t for t in TICKERS if t not in owned_tickers]
+
+# ------------------ FUNCTION: GENERATE CHART FOR BEST OPTION ------------------
+def generate_best_chart(best, is_put=True):
+    historicals = r.stocks.get_stock_historicals(best['Ticker'], interval='day', span='month', bounds='regular')
+    df = pd.DataFrame(historicals)
+    df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
+    df.set_index('begins_at', inplace=True)
+    df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
+    df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
+    all_days = pd.date_range(start=df.index.min(), end=df.index.max(), freq='B')
+    df = df.reindex(all_days)
+    df.index = df.index.tz_localize(None)
+    df['close'] = df['close'].ffill()
+    df['open'] = df['open'].fillna(df['close'])
+    df['high'] = df['high'].fillna(df[['open','close']].max(axis=1))
+    df['low'] = df['low'].fillna(df[['open','close']].min(axis=1))
+    df['volume'] = df['volume'].fillna(0)
+
+    last_14_low = df['low'][-LOW_DAYS:].min()
+    strikes = [best['Strike Price']]
+    buf = plot_candlestick(df, best['Current Price'], last_14_low, strikes, best['Expiration Date'])
+    return buf
 
 # ------------------ FUNCTION: PROCESS PUTS ------------------
 def process_puts(tickers):
@@ -240,7 +262,7 @@ def process_puts(tickers):
         except Exception as e:
             send_telegram_message(f"⚠️ Error processing {TICKER}: {e}")
 
-    # Best put alert
+    # Best put alert with chart
     if all_options:
         best = max(all_options, key=lambda x: (x['Profit/Risk'], x['Distance From Low %']))
         msg_lines = [
@@ -254,7 +276,8 @@ def process_puts(tickers):
             f"💎 Premium/Risk: {best['Profit/Risk']:.2f}",
             f"📉 Dist. from 1M Low: {best['Distance From Low %']*100:.1f}%"
         ]
-        send_telegram_message("\n".join(msg_lines))
+        buf = generate_best_chart(best, is_put=True)
+        send_telegram_photo(buf, "\n".join(msg_lines))
 
 # ------------------ FUNCTION: PROCESS COVERED CALLS ------------------
 def process_calls(tickers):
@@ -327,12 +350,13 @@ def process_calls(tickers):
                             "Ticker": TICKER, "Current Price": current_price, "Expiration Date": exp_date,
                             "Strike Price": strike, "Option Price": price, "Delta": delta,
                             "Prob OTM": prob_OTM, "Profit/Risk": profit_risk, "URL": rh_url,
-                            "Month High": month_high, "Distance From High $": distance_from_high, "Distance From High %": distance_pct
+                            "Month High": month_high, "Distance From High %": distance_pct
                         })
 
             selected_calls = sorted(candidate_calls, key=lambda x:x['Profit/Risk'], reverse=True)[:NUM_OPTIONS]
             all_options.extend(selected_calls)
 
+            # Send chart and Telegram
             selected_strikes = [p['Strike Price'] for p in selected_calls]
             msg_lines = [
                 f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}",
@@ -354,7 +378,7 @@ def process_calls(tickers):
         except Exception as e:
             send_telegram_message(f"⚠️ Error processing {TICKER}: {e}")
 
-    # Best call alert
+    # Best call alert with chart
     if all_options:
         best = max(all_options, key=lambda x: (x['Profit/Risk'], x['Distance From High %']))
         msg_lines = [
@@ -368,7 +392,8 @@ def process_calls(tickers):
             f"💎 Premium/Risk: {best['Profit/Risk']:.2f}",
             f"📉 Dist. from 1M High: {best['Distance From High %']*100:.1f}%"
         ]
-        send_telegram_message("\n".join(msg_lines))
+        buf = generate_best_chart(best, is_put=False)
+        send_telegram_photo(buf, "\n".join(msg_lines))
 
 # ------------------ MAIN LOGIC ------------------
 if owned_tickers:
