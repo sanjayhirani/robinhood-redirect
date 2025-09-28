@@ -1,24 +1,40 @@
-# robinhood_puts_full_final.py
+# robinhood_puts_optimized_final.py
 
-import os, requests, io
+import sys
+import subprocess
+import os
+import requests
+import io
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+
+# ------------------ AUTO-INSTALL DEPENDENCIES ------------------
+try:
+    import yfinance
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance"])
+    import yfinance
+
+try:
+    import lxml
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "lxml"])
+    import lxml
+
 import robin_stocks.robinhood as r
-import yfinance as yf
 
 # ------------------ CONFIG ------------------
-TICKERS = ["TLRY", "PLUG", "BITF", "BBAI", "SPCE", "ONDS", "GRAB", "LUMN",
-           "RIG", "BB", "HTZ", "RXRX", "CLOV", "RZLV", "NVTS", "RR"]
+TICKERS = ["TLRY","PLUG","BITF","BBAI","SPCE","ONDS","GRAB","LUMN",
+           "RIG","BB","HTZ","RXRX","CLOV","RZLV","NVTS","RR"]
 NUM_PUTS = 2
 LOW_DAYS = 14
 MAX_EXP_DAYS = 21
 CANDLE_WIDTH = 0.6
 MIN_PRICE = 0.05
 BEST_MIN_PRICE = 0.1
-BEST_MIN_PROB = 0.8
 
 USERNAME = os.environ["RH_USERNAME"]
 PASSWORD = os.environ["RH_PASSWORD"]
@@ -27,8 +43,8 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 # ------------------ UTILITIES ------------------
 def risk_emoji(prob_otm):
-    if prob_otm >= 0.8: return "✅"
-    elif prob_otm >= 0.6: return "🟡"
+    if prob_otm >= 80: return "✅"
+    elif prob_otm >= 60: return "🟡"
     else: return "⚠️"
 
 def send_telegram_photo(buf, caption):
@@ -45,12 +61,12 @@ def plot_candlestick(df, current_price, last_14_low, strike_price=None, exp_date
     fig.patch.set_facecolor('black')
     ax.set_facecolor('black')
     for i in range(len(df)):
-        color = 'lime' if df['close'].iloc[i] >= df['open'].iloc[i] else 'red'
-        ax.add_patch(plt.Rectangle(
-            (mdates.date2num(df.index[i])-CANDLE_WIDTH/2, min(df['open'].iloc[i], df['close'].iloc[i])),
-            CANDLE_WIDTH, abs(df['close'].iloc[i]-df['open'].iloc[i]), color=color
-        ))
-        ax.plot([mdates.date2num(df.index[i]), mdates.date2num(df.index[i])],
+        color = 'lime' if df['close'].iloc[i]>=df['open'].iloc[i] else 'red'
+        ax.add_patch(plt.Rectangle((mdates.date2num(df.index[i])-CANDLE_WIDTH/2,
+                                    min(df['open'].iloc[i],df['close'].iloc[i])),
+                                   CANDLE_WIDTH, abs(df['close'].iloc[i]-df['open'].iloc[i]),
+                                   color=color))
+        ax.plot([mdates.date2num(df.index[i]),mdates.date2num(df.index[i])],
                 [df['low'].iloc[i], df['high'].iloc[i]], color=color, linewidth=1)
     ax.axhline(current_price, color='magenta', linestyle='--', linewidth=1.5, label=f'Current: ${current_price:.2f}')
     ax.axhline(last_14_low, color='yellow', linestyle='--', linewidth=2, label=f'14-day Low: ${last_14_low:.2f}')
@@ -75,7 +91,7 @@ def plot_candlestick(df, current_price, last_14_low, strike_price=None, exp_date
     return buf
 
 # ------------------ LOGIN ------------------
-r.login(USERNAME, PASSWORD)
+r.login(USERNAME,PASSWORD)
 today = datetime.now().date()
 cutoff = today + timedelta(days=30)
 
@@ -87,7 +103,7 @@ risky_count = 0
 
 for ticker in TICKERS:
     try:
-        stock = yf.Ticker(ticker)
+        stock = yfinance.Ticker(ticker)
         msg_parts = [f"📊 <b>{ticker}</b>"]
         has_event = False
 
@@ -116,23 +132,21 @@ for ticker in TICKERS:
         else:
             safe_tickers.append(ticker)
             safe_count += 1
-
     except Exception as e:
         risky_msgs.append(f"⚠️ <b>{ticker}</b> error: {e}")
         risky_count += 1
 
 summary_lines = []
 if risky_msgs:
-    summary_lines.append("⚠️ <b>Risky Tickers</b>\n" + "\n".join(risky_msgs) + "\n")
+    summary_lines.append("⚠️ <b>Risky Tickers</b>\n"+"\n".join(risky_msgs)+"\n")
 else:
     summary_lines.append("⚠️ <b>No risky tickers found 🎉</b>\n")
 
 safe_tickers_sorted = sorted(safe_tickers)
 safe_bold = [f"<b>{t}</b>" for t in safe_tickers_sorted]
-safe_rows = [", ".join(safe_bold[i:i+4]) for i in range(0, len(safe_bold), 4)]
+safe_rows = [", ".join(safe_bold[i:i+4]) for i in range(0,len(safe_bold),4)]
 if safe_rows:
-    summary_lines.append("✅ <b>Safe Tickers</b>\n" + "\n".join(safe_rows))
-
+    summary_lines.append("✅ <b>Safe Tickers</b>\n"+"\n".join(safe_rows))
 summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
 send_telegram_message("\n".join(summary_lines))
 
@@ -163,13 +177,9 @@ for ticker in safe_tickers:
 
         # Options
         all_puts = r.options.find_tradable_options(ticker, optionType="put")
-        valid_puts = []
-        for opt in all_puts:
-            strike = float(opt['strike_price'])
-            exp_date = pd.to_datetime(opt['expiration_date']).date()
-            if strike >= current_price or (exp_date - today).days > MAX_EXP_DAYS:
-                continue
-            valid_puts.append((strike, opt))
+        valid_puts = [(float(opt['strike_price']), opt) for opt in all_puts
+                      if float(opt['strike_price']) < current_price and
+                      (pd.to_datetime(opt['expiration_date']).date() - today).days <= MAX_EXP_DAYS]
         valid_puts.sort(key=lambda x: x[0], reverse=True)
         top_puts = valid_puts[:3]
 
@@ -180,25 +190,20 @@ for ticker in safe_tickers:
             if not market_data: continue
             md = market_data[0]
 
-            # Ask price
             try:
                 price = float(md.get('ask_price') or 0.0)
                 if price < MIN_PRICE: continue
             except: continue
 
-            # Chance of Profit
             try:
-                cop_str = md.get('chance_of_profit_long')
-                cop_clean = str(cop_str).replace('%','').replace(',','').strip()
-                prob_OTM = float(cop_clean)/100
-            except:
-                prob_OTM = 0.0
+                cop = md.get('chance_of_profit_long')
+                prob_OTM = int(str(cop).replace('%','').strip())
+            except: prob_OTM = 0
 
-            # Delta
             try: delta = float(md.get('delta') or 0.0)
             except: delta = 0.0
 
-            premium_risk = price / max(current_price - strike, 0.01)
+            premium_risk = price / max(current_price-strike, 0.01)
 
             candidate_puts.append({
                 "Ticker": ticker,
@@ -226,7 +231,7 @@ for ticker in safe_tickers:
                 msg_lines.append(f"💲 Strike: ${opt['Strike Price']}")
                 msg_lines.append(f"💰 Price : ${opt['Option Price']:.2f}")
                 msg_lines.append(f"🔺 Delta : {opt['Delta']:.3f}")
-                msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%")
+                msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']}%")
                 msg_lines.append(f"💎 Premium/Risk: {opt['Premium/Risk']:.2f}\n")
             buf = plot_candlestick(opt['HistoricalDF'], current_price, opt['Last14Low'])
             send_telegram_photo(buf, "\n".join(msg_lines))
@@ -235,11 +240,11 @@ for ticker in safe_tickers:
         send_telegram_message(f"⚠️ Error processing {ticker}: {e}")
 
 # ------------------ BEST OPTION ALERT ------------------
-valid_best = [opt for opt in all_options if opt['Option Price'] >= BEST_MIN_PRICE and opt['Prob OTM'] >= BEST_MIN_PROB]
+valid_best = [opt for opt in all_options if opt['Option Price']>=BEST_MIN_PRICE and opt['Prob OTM']>=80]
 if not valid_best and all_options:
-    best = max(all_options, key=lambda x: x['Prob OTM'])
+    best = max(all_options, key=lambda x:x['Prob OTM'])
 elif valid_best:
-    best = max(valid_best, key=lambda x: x['Prob OTM'])
+    best = max(valid_best, key=lambda x:x['Prob OTM'])
 else:
     best = None
 
@@ -252,7 +257,7 @@ if best:
         f"💲 Strike    : ${best['Strike Price']}",
         f"💰 Price     : ${best['Option Price']:.2f}",
         f"🔺 Delta     : {best['Delta']:.3f}",
-        f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
+        f"🎯 Prob OTM  : {best['Prob OTM']}%",
         f"💎 Premium/Risk: {best['Premium/Risk']:.2f}"
     ]
     buf = plot_candlestick(best['HistoricalDF'], best['Stock Price'], best['Last14Low'],
