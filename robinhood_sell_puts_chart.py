@@ -1,9 +1,28 @@
 # robinhood_sell_puts_with_risk.py
-import os
+
+# ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 import sys
 import subprocess
+
+# Auto-install yfinance
+try:
+    import yfinance
+except ImportError:
+    print("yfinance not found. Installing...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance"])
+    import yfinance
+
+# Auto-install lxml
+try:
+    import lxml
+except ImportError:
+    print("lxml not found. Installing...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "lxml"])
+    import lxml
+
+# ------------------ OTHER IMPORTS ------------------
+import os
 import requests
-import yfinance as yf
 import robin_stocks.robinhood as r
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
@@ -31,13 +50,6 @@ USERNAME = os.environ["RH_USERNAME"]
 PASSWORD = os.environ["RH_PASSWORD"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-
-# ------------------ ENSURE LXML ------------------
-try:
-    import lxml
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "lxml"])
-    import lxml
 
 # ------------------ UTILITY FUNCTIONS ------------------
 def black_scholes_put_delta(S, K, T, r, sigma):
@@ -85,20 +97,20 @@ def plot_candlestick(df, current_price, last_14_low, strike_price=None, exp_date
         ))
         ax.plot([mdates.date2num(df.index[i]), mdates.date2num(df.index[i])],
                  [df['low'].iloc[i], df['high'].iloc[i]], color=color, linewidth=1)
-    ax.axhline(current_price, color='magenta', linestyle='--', linewidth=1.5, label=f'Current: ${current_price:.2f}')
-    ax.axhline(last_14_low, color='yellow', linestyle='--', linewidth=2, label=f'14-day Low: ${last_14_low:.2f}')
+    ax.axhline(current_price, color='magenta', linestyle='--', linewidth=1.5, label=f'Current: £{current_price:.2f}')
+    ax.axhline(last_14_low, color='yellow', linestyle='--', linewidth=2, label=f'14-day Low: £{last_14_low:.2f}')
     if strike_price is not None:
-        ax.axhline(strike_price, color='cyan', linestyle='--', linewidth=1.5, label=f'Strike: ${strike_price:.2f}')
+        ax.axhline(strike_price, color='cyan', linestyle='--', linewidth=1.5, label=f'Strike: £{strike_price:.2f}')
     if exp_date is not None:
         exp_date_obj = pd.to_datetime(exp_date).tz_localize(None)
         if df.index.min() <= exp_date_obj <= df.index.max():
-            ax.axvline(mdates.date2num(exp_date_obj), color='orange', linestyle='--', linewidth=2, label=f'Expiration: {exp_date}')
-    ax.set_ylabel('Price ($)', color='white')
+            ax.axvline(mdates.date2num(exp_date_obj), color='orange', linestyle='--', linewidth=2, label=f'Expiration: {exp_date_obj.strftime("%d-%m-%y")}')
+    ax.set_ylabel('Price (£)', color='white')
     ax.tick_params(colors='white')
     ax.grid(True, color='gray', linestyle='--', alpha=0.3)
     ax.legend(facecolor='black', edgecolor='white', labelcolor='white')
     ax.xaxis.set_major_locator(mdates.DayLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m'))
     fig.autofmt_xdate(rotation=45)
     plt.tight_layout()
     buf = io.BytesIO()
@@ -110,9 +122,9 @@ def plot_candlestick(df, current_price, last_14_low, strike_price=None, exp_date
 # ------------------ LOGIN ------------------
 r.login(USERNAME, PASSWORD)
 today = datetime.now().date()
+cutoff = today + timedelta(days=30)
 
 # ------------------ PART 1: EARNINGS/DIVIDENDS RISK CHECK ------------------
-cutoff = today + timedelta(days=30)
 safe_tickers = []
 risky_msgs = []
 safe_count = 0
@@ -120,10 +132,11 @@ risky_count = 0
 
 for ticker in TICKERS:
     try:
-        stock = yf.Ticker(ticker)
+        stock = yfinance.Ticker(ticker)
         msg_parts = [f"📊 <b>{ticker}</b>"]
         has_event = False
 
+        # Dividend
         try:
             if not stock.dividends.empty:
                 div_date = stock.dividends.index[-1].date()
@@ -133,6 +146,7 @@ for ticker in TICKERS:
         except Exception as e:
             msg_parts.append(f"⚠️ Dividend check error: {e}")
 
+        # Earnings
         try:
             earnings_dates = stock.get_earnings_dates(limit=2)
             if not earnings_dates.empty:
@@ -154,9 +168,21 @@ for ticker in TICKERS:
         risky_msgs.append(f"⚠️ <b>{ticker}</b> error: {e}")
         risky_count += 1
 
+# Send Earnings/Dividends alert first
+summary_lines = []
+if risky_msgs:
+    summary_lines.append("⚠️ <b>Risky Tickers</b>\n" + "\n".join(risky_msgs) + "\n")
+else:
+    summary_lines.append("⚠️ <b>No risky tickers found 🎉</b>\n")
+
 safe_tickers_sorted = sorted(safe_tickers)
 safe_bold = [f"<b>{t}</b>" for t in safe_tickers_sorted]
 safe_rows = [", ".join(safe_bold[i:i+4]) for i in range(0, len(safe_bold), 4)]
+if safe_rows:
+    summary_lines.append("✅ <b>Safe Tickers</b>\n" + "\n".join(safe_rows))
+
+summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
+send_telegram_message("\n".join(summary_lines))
 
 # ------------------ PART 2: ROBINHOOD OPTIONS ------------------
 all_options = []
@@ -226,14 +252,14 @@ for TICKER in safe_tickers:  # only safe tickers
         all_options.extend(selected_puts)
 
         msg_lines = [
-            f"📊 <a href='{rh_url}'>{TICKER}</a> current: 💲{current_price:.2f}",
-            f"💹 1M High: ${month_high:.2f}", f"📉 1M Low: ${month_low:.2f}",
+            f"📊 <a href='{rh_url}'>{TICKER}</a> current: £{current_price:.2f}",
+            f"💹 1M High: £{month_high:.2f}", f"📉 1M Low: £{month_low:.2f}",
             f"📌 Proximity: {proximity}\n"
         ]
         for opt in selected_puts:
             msg_lines.append(f"{risk_emoji(opt['Prob OTM'])} 📅 Exp: {opt['Expiration Date']}")
             msg_lines.append(f"💲 Strike: {opt['Strike Price']}")
-            msg_lines.append(f"💰 Price : ${opt['Option Price']:.2f}")
+            msg_lines.append(f"💰 Price : £{opt['Option Price']:.2f}")
             msg_lines.append(f"🔺 Delta : {opt['Delta']:.3f}")
             msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%\n")
 
@@ -248,10 +274,10 @@ if all_options:
     premium_risk = best['Option Price'] / max(best['Current Price'] - best['Strike Price'], 0.01)
     msg_lines = [
         "🔥 <b>Best Option to Sell</b>:",
-        f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: 💲{best['Current Price']:.2f}",
+        f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: £{best['Current Price']:.2f}",
         f"✅ Expiration : {best['Expiration Date']}",
         f"💲 Strike    : {best['Strike Price']}",
-        f"💰 Price     : ${best['Option Price']:.2f}",
+        f"💰 Price     : £{best['Option Price']:.2f}",
         f"🔺 Delta     : {best['Delta']:.3f}",
         f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
         f"💎 Premium/Risk: {premium_risk:.2f}"
@@ -275,16 +301,3 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, best['Strike Price'], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
-
-# ------------------ FINAL TELEGRAM SUMMARY ------------------
-summary_lines = []
-if risky_msgs:
-    summary_lines.append("⚠️ <b>Risky Tickers</b>\n" + "\n".join(risky_msgs) + "\n")
-else:
-    summary_lines.append("⚠️ <b>No risky tickers found 🎉</b>\n")
-
-if safe_rows:
-    summary_lines.append("✅ <b>Safe Tickers</b>\n" + "\n".join(safe_rows))
-
-summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
-send_telegram_message("\n".join(summary_lines))
