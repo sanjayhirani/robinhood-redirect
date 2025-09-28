@@ -1,4 +1,4 @@
-# robinhood_sell_puts_with_risk.py
+# robinhood_options_manager.py
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 import sys
@@ -34,7 +34,7 @@ import pandas as pd
 # ------------------ CONFIG ------------------
 TICKERS = ["SNAP", "ACHR", "OPEN", "BBAI", "PTON", "ONDS", "GRAB", "LAC", "HTZ", "RZLV" ,"NVTS"]
 NUM_EXPIRATIONS = 3
-NUM_PUTS = 2
+NUM_OPTIONS = 2
 PRICE_ADJUST = 0.01
 RISK_FREE_RATE = 0.05
 MIN_PRICE = 0.10
@@ -53,6 +53,11 @@ def black_scholes_put_delta(S, K, T, r, sigma):
     if sigma <= 0 or T <= 0: return -1.0
     d1 = (log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt(T))
     return norm.cdf(d1) - 1
+
+def black_scholes_call_delta(S, K, T, r, sigma):
+    if sigma <= 0 or T <= 0: return 1.0
+    d1 = (log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt(T))
+    return norm.cdf(d1)
 
 def risk_emoji(prob_otm):
     if prob_otm >= 0.8: return "✅"
@@ -123,195 +128,253 @@ def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_
 # ------------------ LOGIN ------------------
 r.login(USERNAME, PASSWORD)
 today = datetime.now().date()
-cutoff = today + timedelta(days=30)
 
-# ------------------ PART 1: EARNINGS/DIVIDENDS RISK CHECK ------------------
-safe_tickers = []
-risky_msgs = []
-safe_count = 0
-risky_count = 0
+# ------------------ HELPER: OWNERSHIP CHECK ------------------
+def get_owned_tickers():
+    positions = r.account.build_holdings()
+    owned = []
+    for t, data in positions.items():
+        if float(data.get('quantity', 0)) >= 100:
+            owned.append(t)
+    return owned
 
-for ticker in TICKERS:
-    try:
-        stock = yfinance.Ticker(ticker)
-        msg_parts = [f"📊 <b>{ticker}</b>"]
-        has_event = False
+owned_tickers = get_owned_tickers()
+safe_tickers = [t for t in TICKERS if t not in owned_tickers]
 
-        # Dividend
+# ------------------ FUNCTION: PROCESS PUTS ------------------
+def process_puts(tickers):
+    all_options = []
+    for TICKER in tickers:
         try:
-            if not stock.dividends.empty:
-                div_date = stock.dividends.index[-1].date()
-                if today <= div_date <= cutoff:
-                    msg_parts.append(f"⚠️ 💰 Dividend on {div_date.strftime('%d-%m-%y')}")
-                    has_event = True
+            current_price = float(r.stocks.get_latest_price(TICKER)[0])
+            rh_url = f"https://robinhood.com/stocks/{TICKER}"
+
+            # Historical data
+            historicals = r.stocks.get_stock_historicals(TICKER, interval='day', span='month', bounds='regular')
+            df = pd.DataFrame(historicals)
+            df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
+            df.set_index('begins_at', inplace=True)
+            df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
+            df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
+            all_days = pd.date_range(start=df.index.min(), end=df.index.max(), freq='B')
+            df = df.reindex(all_days)
+            df.index = df.index.tz_localize(None)
+            df['close'] = df['close'].ffill()
+            df['open'] = df['open'].fillna(df['close'])
+            df['high'] = df['high'].fillna(df[['open','close']].max(axis=1))
+            df['low'] = df['low'].fillna(df[['open','close']].min(axis=1))
+            df['volume'] = df['volume'].fillna(0)
+
+            month_high = df['close'].max()
+            month_low = df['close'].min()
+            last_14_low = df['low'][-LOW_DAYS:].min()
+            distance_from_low = current_price - month_low
+            distance_pct = distance_from_low / month_low
+            proximity = "🔺 Closer to 1M High" if abs(current_price - month_high) < abs(current_price - month_low) else "🔻 Closer to 1M Low"
+
+            all_puts = r.options.find_tradable_options(TICKER, optionType="put")
+            exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))[:NUM_EXPIRATIONS]
+
+            candidate_puts = []
+            sigma = historical_volatility(df['close'].values, HV_PERIOD)
+
+            for exp_date in exp_dates:
+                exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
+                T = max((exp_date_obj - today).days / 365, 1/365)
+                puts_for_exp = [opt for opt in all_puts if opt['expiration_date'] == exp_date]
+
+                strikes_below = sorted([float(opt['strike_price']) for opt in puts_for_exp if float(opt['strike_price']) < current_price], reverse=True)
+                closest_strikes = strikes_below[:3]
+
+                for opt in puts_for_exp:
+                    strike = float(opt['strike_price'])
+                    if strike not in closest_strikes:
+                        continue
+
+                    option_id = opt['id']
+                    market_data = r.options.get_option_market_data_by_id(option_id)
+
+                    price, delta = 0.0, -1.0
+                    if market_data:
+                        try: price = float(market_data[0].get('adjusted_mark_price') or market_data[0].get('mark_price') or 0.0)
+                        except: price=0.0
+                        try: delta = float(market_data[0].get('delta')) if market_data[0].get('delta') else None
+                        except: delta=None
+                        if delta is None or delta==0.0:
+                            delta = black_scholes_put_delta(current_price, strike, T, RISK_FREE_RATE, sigma)
+
+                    price = max(price - PRICE_ADJUST,0.0)
+                    if price>=MIN_PRICE:
+                        prob_OTM = 1 - abs(delta)
+                        risk = max(current_price - strike, 0.01)
+                        profit_risk = price / risk
+                        candidate_puts.append({
+                            "Ticker": TICKER, "Current Price": current_price, "Expiration Date": exp_date,
+                            "Strike Price": strike, "Option Price": price, "Delta": delta,
+                            "Prob OTM": prob_OTM, "Profit/Risk": profit_risk, "URL": rh_url,
+                            "Month Low": month_low, "Distance From Low $": distance_from_low, "Distance From Low %": distance_pct
+                        })
+
+            selected_puts = sorted(candidate_puts, key=lambda x:x['Profit/Risk'], reverse=True)[:NUM_OPTIONS]
+            all_options.extend(selected_puts)
+
+            # Send chart and Telegram
+            selected_strikes = [p['Strike Price'] for p in selected_puts]
+            msg_lines = [
+                f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}",
+                f"💹 1M High: ${month_high:.2f}", f"📉 1M Low: ${month_low:.2f}",
+                f"📌 Proximity: {proximity}\n"
+            ]
+            for opt in selected_puts:
+                msg_lines.append(f"{risk_emoji(opt['Prob OTM'])} 📅 Exp: {opt['Expiration Date']}")
+                msg_lines.append(f"💲 Strike: {opt['Strike Price']}")
+                msg_lines.append(f"💰 Price : ${opt['Option Price']:.2f}")
+                msg_lines.append(f"🔺 Delta : {opt['Delta']:.3f}")
+                msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%")
+                msg_lines.append(f"💎 Premium/Risk: {opt['Profit/Risk']:.2f}")
+                msg_lines.append(f"📉 Dist. from 1M Low: {opt['Distance From Low %']*100:.1f}%\n")
+
+            buf = plot_candlestick(df, current_price, last_14_low, selected_strikes)
+            send_telegram_photo(buf, "\n".join(msg_lines))
+
         except Exception as e:
-            msg_parts.append(f"⚠️ Dividend check error: {e}")
+            send_telegram_message(f"⚠️ Error processing {TICKER}: {e}")
 
-        # Earnings
-        try:
-            earnings_dates = stock.get_earnings_dates(limit=2)
-            if not earnings_dates.empty:
-                earnings_date = earnings_dates.index.min().date()
-                if today <= earnings_date <= cutoff:
-                    msg_parts.append(f"⚠️ 📢 Earnings on {earnings_date.strftime('%d-%m-%y')}")
-                    has_event = True
-        except Exception as e:
-            msg_parts.append(f"⚠️ Earnings check error: {e}")
-
-        if has_event:
-            risky_msgs.append(" | ".join(msg_parts))
-            risky_count += 1
-        else:
-            safe_tickers.append(ticker)
-            safe_count += 1
-
-    except Exception as e:
-        risky_msgs.append(f"⚠️ <b>{ticker}</b> error: {e}")
-        risky_count += 1
-
-summary_lines = []
-if risky_msgs:
-    summary_lines.append("⚠️ <b>Risky Tickers</b>\n" + "\n".join(risky_msgs) + "\n")
-else:
-    summary_lines.append("⚠️ <b>No risky tickers found 🎉</b>\n")
-
-safe_tickers_sorted = sorted(safe_tickers)
-safe_bold = [f"<b>{t}</b>" for t in safe_tickers_sorted]
-safe_rows = [", ".join(safe_bold[i:i+4]) for i in range(0, len(safe_bold), 4)]
-if safe_rows:
-    summary_lines.append("✅ <b>Safe Tickers</b>\n" + "\n".join(safe_rows))
-
-summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
-send_telegram_message("\n".join(summary_lines))
-
-# ------------------ PART 2: ROBINHOOD OPTIONS ------------------
-all_options = []
-for TICKER in safe_tickers:
-    try:
-        current_price = float(r.stocks.get_latest_price(TICKER)[0])
-        rh_url = f"https://robinhood.com/stocks/{TICKER}"
-
-        historicals = r.stocks.get_stock_historicals(TICKER, interval='day', span='month', bounds='regular')
-        df = pd.DataFrame(historicals)
-        df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
-        df.set_index('begins_at', inplace=True)
-        df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
-        df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
-        all_days = pd.date_range(start=df.index.min(), end=df.index.max(), freq='B')
-        df = df.reindex(all_days)
-        df.index = df.index.tz_localize(None)
-        df['close'] = df['close'].ffill()
-        df['open'] = df['open'].fillna(df['close'])
-        df['high'] = df['high'].fillna(df[['open','close']].max(axis=1))
-        df['low'] = df['low'].fillna(df[['open','close']].min(axis=1))
-        df['volume'] = df['volume'].fillna(0)
-
-        month_high = df['close'].max()
-        month_low = df['close'].min()
-        last_14_low = df['low'][-LOW_DAYS:].min()
-        distance_from_low = current_price - month_low
-        distance_pct = distance_from_low / month_low
-        proximity = "🔺 Closer to 1M High" if abs(current_price - month_high) < abs(current_price - month_low) else "🔻 Closer to 1M Low"
-
-        all_puts = r.options.find_tradable_options(TICKER, optionType="put")
-        exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))[:NUM_EXPIRATIONS]
-
-        candidate_puts = []
-        sigma = historical_volatility(df['close'].values, HV_PERIOD)
-
-        for exp_date in exp_dates:
-            exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
-            T = max((exp_date_obj - today).days / 365, 1/365)
-            puts_for_exp = [opt for opt in all_puts if opt['expiration_date'] == exp_date]
-
-            strikes_below = sorted([float(opt['strike_price']) for opt in puts_for_exp if float(opt['strike_price']) < current_price], reverse=True)
-            closest_strikes = strikes_below[:3]
-
-            for opt in puts_for_exp:
-                strike = float(opt['strike_price'])
-                if strike not in closest_strikes:
-                    continue
-
-                option_id = opt['id']
-                market_data = r.options.get_option_market_data_by_id(option_id)
-
-                price, delta = 0.0, -1.0
-                if market_data:
-                    try: price = float(market_data[0].get('adjusted_mark_price') or market_data[0].get('mark_price') or 0.0)
-                    except: price=0.0
-                    try: delta = float(market_data[0].get('delta')) if market_data[0].get('delta') else None
-                    except: delta=None
-                    if delta is None or delta==0.0:
-                        delta = black_scholes_put_delta(current_price, strike, T, RISK_FREE_RATE, sigma)
-
-                price = max(price - PRICE_ADJUST,0.0)
-                if price>=MIN_PRICE:
-                    prob_OTM = 1 - abs(delta)
-                    risk = max(current_price - strike, 0.01)
-                    profit_risk = price / risk
-                    candidate_puts.append({
-                        "Ticker": TICKER, "Current Price": current_price, "Expiration Date": exp_date,
-                        "Strike Price": strike, "Option Price": price, "Delta": delta,
-                        "Prob OTM": prob_OTM, "Profit/Risk": profit_risk, "URL": rh_url,
-                        "Month Low": month_low, "Distance From Low $": distance_from_low, "Distance From Low %": distance_pct
-                    })
-
-        selected_puts = sorted(candidate_puts, key=lambda x:x['Profit/Risk'], reverse=True)[:NUM_PUTS]
-        all_options.extend(selected_puts)
-
-        selected_strikes = [p['Strike Price'] for p in selected_puts]
+    # Best put alert
+    if all_options:
+        best = max(all_options, key=lambda x: (x['Profit/Risk'], x['Distance From Low %']))
         msg_lines = [
-            f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}",
-            f"💹 1M High: ${month_high:.2f}", f"📉 1M Low: ${month_low:.2f}",
-            f"📌 Proximity: {proximity}\n"
+            "🔥 <b>Best Put to Sell</b>:",
+            f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Current Price']:.2f}",
+            f"✅ Expiration : {best['Expiration Date']}",
+            f"💲 Strike    : {best['Strike Price']}",
+            f"💰 Price     : ${best['Option Price']:.2f}",
+            f"🔺 Delta     : {best['Delta']:.3f}",
+            f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
+            f"💎 Premium/Risk: {best['Profit/Risk']:.2f}",
+            f"📉 Dist. from 1M Low: {best['Distance From Low %']*100:.1f}%"
         ]
-        for opt in selected_puts:
-            msg_lines.append(f"{risk_emoji(opt['Prob OTM'])} 📅 Exp: {opt['Expiration Date']}")
-            msg_lines.append(f"💲 Strike: {opt['Strike Price']}")
-            msg_lines.append(f"💰 Price : ${opt['Option Price']:.2f}")
-            msg_lines.append(f"🔺 Delta : {opt['Delta']:.3f}")
-            msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%")
-            msg_lines.append(f"💎 Premium/Risk: {opt['Profit/Risk']:.2f}")
-            msg_lines.append(f"📉 Dist. from 1M Low: {opt['Distance From Low %']*100:.1f}%\n")
+        send_telegram_message("\n".join(msg_lines))
 
-        buf = plot_candlestick(df, current_price, last_14_low, selected_strikes)
-        send_telegram_photo(buf, "\n".join(msg_lines))
+# ------------------ FUNCTION: PROCESS COVERED CALLS ------------------
+def process_calls(tickers):
+    all_options = []
+    for TICKER in tickers:
+        try:
+            current_price = float(r.stocks.get_latest_price(TICKER)[0])
+            rh_url = f"https://robinhood.com/stocks/{TICKER}"
 
-    except Exception as e:
-        send_telegram_message(f"⚠️ Error processing {TICKER}: {e}")
+            # Historical data
+            historicals = r.stocks.get_stock_historicals(TICKER, interval='day', span='month', bounds='regular')
+            df = pd.DataFrame(historicals)
+            df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
+            df.set_index('begins_at', inplace=True)
+            df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
+            df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
+            all_days = pd.date_range(start=df.index.min(), end=df.index.max(), freq='B')
+            df = df.reindex(all_days)
+            df.index = df.index.tz_localize(None)
+            df['close'] = df['close'].ffill()
+            df['open'] = df['open'].fillna(df['close'])
+            df['high'] = df['high'].fillna(df[['open','close']].max(axis=1))
+            df['low'] = df['low'].fillna(df[['open','close']].min(axis=1))
+            df['volume'] = df['volume'].fillna(0)
 
-# ------------------ BEST OPTION ALERT ------------------
-if all_options:
-    best = max(all_options, key=lambda x: (x['Profit/Risk'], x['Distance From Low %']))
-    premium_risk = best['Profit/Risk']
+            month_high = df['close'].max()
+            month_low = df['close'].min()
+            last_14_low = df['low'][-LOW_DAYS:].min()
+            distance_from_high = month_high - current_price
+            distance_pct = distance_from_high / month_high
+            proximity = "🔺 Closer to 1M High" if abs(current_price - month_high) < abs(current_price - month_low) else "🔻 Closer to 1M Low"
 
-    msg_lines = [
-        "🔥 <b>Best Option to Sell</b>:",
-        f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Current Price']:.2f}",
-        f"✅ Expiration : {best['Expiration Date']}",
-        f"💲 Strike    : {best['Strike Price']}",
-        f"💰 Price     : ${best['Option Price']:.2f}",
-        f"🔺 Delta     : {best['Delta']:.3f}",
-        f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
-        f"💎 Premium/Risk: {premium_risk:.2f}",
-        f"📉 Dist. from 1M Low: {best['Distance From Low %']*100:.1f}%"
-    ]
+            all_calls = r.options.find_tradable_options(TICKER, optionType="call")
+            exp_dates = sorted(set([opt['expiration_date'] for opt in all_calls]))[:NUM_EXPIRATIONS]
 
-    historicals = r.stocks.get_stock_historicals(best['Ticker'], interval='day', span='month', bounds='regular')
-    df = pd.DataFrame(historicals)
-    df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
-    df.set_index('begins_at', inplace=True)
-    df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
-    df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
-    all_days = pd.date_range(start=df.index.min(), end=df.index.max(), freq='B')
-    df = df.reindex(all_days)
-    df.index = df.index.tz_localize(None)
-    df['close'] = df['close'].ffill()
-    df['open'] = df['open'].fillna(df['close'])
-    df['high'] = df['high'].fillna(df[['open','close']].max(axis=1))
-    df['low'] = df['low'].fillna(df[['open','close']].min(axis=1))
-    df['volume'] = df['volume'].fillna(0)
+            candidate_calls = []
+            sigma = historical_volatility(df['close'].values, HV_PERIOD)
 
-    last_14_low = df['low'][-LOW_DAYS:].min()
-    buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
-    send_telegram_photo(buf, "\n".join(msg_lines))
+            for exp_date in exp_dates:
+                exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
+                T = max((exp_date_obj - today).days / 365, 1/365)
+                calls_for_exp = [opt for opt in all_calls if opt['expiration_date'] == exp_date]
+
+                strikes_above = sorted([float(opt['strike_price']) for opt in calls_for_exp if float(opt['strike_price']) > current_price])
+                closest_strikes = strikes_above[:3]
+
+                for opt in calls_for_exp:
+                    strike = float(opt['strike_price'])
+                    if strike not in closest_strikes:
+                        continue
+
+                    option_id = opt['id']
+                    market_data = r.options.get_option_market_data_by_id(option_id)
+
+                    price, delta = 0.0, 1.0
+                    if market_data:
+                        try: price = float(market_data[0].get('adjusted_mark_price') or market_data[0].get('mark_price') or 0.0)
+                        except: price=0.0
+                        try: delta = float(market_data[0].get('delta')) if market_data[0].get('delta') else None
+                        except: delta=None
+                        if delta is None or delta==0.0:
+                            delta = black_scholes_call_delta(current_price, strike, T, RISK_FREE_RATE, sigma)
+
+                    price = max(price - PRICE_ADJUST,0.0)
+                    if price>=MIN_PRICE:
+                        prob_OTM = 1 - delta
+                        risk = max(strike - current_price, 0.01)
+                        profit_risk = price / risk
+                        candidate_calls.append({
+                            "Ticker": TICKER, "Current Price": current_price, "Expiration Date": exp_date,
+                            "Strike Price": strike, "Option Price": price, "Delta": delta,
+                            "Prob OTM": prob_OTM, "Profit/Risk": profit_risk, "URL": rh_url,
+                            "Month High": month_high, "Distance From High $": distance_from_high, "Distance From High %": distance_pct
+                        })
+
+            selected_calls = sorted(candidate_calls, key=lambda x:x['Profit/Risk'], reverse=True)[:NUM_OPTIONS]
+            all_options.extend(selected_calls)
+
+            selected_strikes = [p['Strike Price'] for p in selected_calls]
+            msg_lines = [
+                f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}",
+                f"💹 1M High: ${month_high:.2f}", f"📉 1M Low: ${month_low:.2f}",
+                f"📌 Proximity: {proximity}\n"
+            ]
+            for opt in selected_calls:
+                msg_lines.append(f"{risk_emoji(opt['Prob OTM'])} 📅 Exp: {opt['Expiration Date']}")
+                msg_lines.append(f"💲 Strike: {opt['Strike Price']}")
+                msg_lines.append(f"💰 Price : ${opt['Option Price']:.2f}")
+                msg_lines.append(f"🔺 Delta : {opt['Delta']:.3f}")
+                msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%")
+                msg_lines.append(f"💎 Premium/Risk: {opt['Profit/Risk']:.2f}")
+                msg_lines.append(f"📉 Dist. from 1M High: {opt['Distance From High %']*100:.1f}%\n")
+
+            buf = plot_candlestick(df, current_price, last_14_low, selected_strikes)
+            send_telegram_photo(buf, "\n".join(msg_lines))
+
+        except Exception as e:
+            send_telegram_message(f"⚠️ Error processing {TICKER}: {e}")
+
+    # Best call alert
+    if all_options:
+        best = max(all_options, key=lambda x: (x['Profit/Risk'], x['Distance From High %']))
+        msg_lines = [
+            "🔥 <b>Best Covered Call to Sell</b>:",
+            f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Current Price']:.2f}",
+            f"✅ Expiration : {best['Expiration Date']}",
+            f"💲 Strike    : {best['Strike Price']}",
+            f"💰 Price     : ${best['Option Price']:.2f}",
+            f"🔺 Delta     : {best['Delta']:.3f}",
+            f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
+            f"💎 Premium/Risk: {best['Profit/Risk']:.2f}",
+            f"📉 Dist. from 1M High: {best['Distance From High %']*100:.1f}%"
+        ]
+        send_telegram_message("\n".join(msg_lines))
+
+# ------------------ MAIN LOGIC ------------------
+if owned_tickers:
+    # If you own shares, sell covered calls
+    process_calls(owned_tickers)
+
+# If you have tickers without shares, sell puts
+if safe_tickers:
+    process_puts(safe_tickers)
