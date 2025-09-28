@@ -73,7 +73,7 @@ def historical_volatility(prices, period=21):
 def send_telegram_photo(buf, caption):
     requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
-        files={'photo': ('chart.png', buf, 'image/png')},
+        files={'photo': buf},
         data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
     )
 
@@ -217,6 +217,7 @@ for TICKER in safe_tickers:  # only safe tickers
         exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))[:NUM_EXPIRATIONS]
 
         candidate_puts = []
+        sigma = historical_volatility(df['close'].values, HV_PERIOD)
 
         for exp_date in exp_dates:
             exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
@@ -230,24 +231,12 @@ for TICKER in safe_tickers:  # only safe tickers
                 market_data = r.options.get_option_market_data_by_id(option_id)
 
                 price, delta = 0.0, -1.0
-                sigma = historical_volatility(df['close'].values, HV_PERIOD)
-
                 if market_data:
-                    try:
-                        ask_price = float(market_data[0].get("ask_price") or 0.0)
-                        price = ask_price
-                    except:
-                        price = 0.0
-                    try:
-                        delta = float(market_data[0].get("delta")) if market_data[0].get("delta") else None
-                    except:
-                        delta = None
-                    try:
-                        iv = market_data[0].get("implied_volatility")
-                        sigma = float(iv) if iv else sigma
-                    except:
-                        pass
-                    if delta is None or delta == 0.0:
+                    try: price = float(market_data[0].get('adjusted_mark_price') or market_data[0].get('mark_price') or 0.0)
+                    except: price=0.0
+                    try: delta = float(market_data[0].get('delta')) if market_data[0].get('delta') else None
+                    except: delta=None
+                    if delta is None or delta==0.0:
                         delta = black_scholes_put_delta(current_price, strike, T, RISK_FREE_RATE, sigma)
 
                 price = max(price - PRICE_ADJUST,0.0)
@@ -288,7 +277,7 @@ if all_options:
         f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Current Price']:.2f}",
         f"✅ Expiration : {best['Expiration Date']}",
         f"💲 Strike    : {best['Strike Price']}",
-        f"💰 Price     : ${best['Option Price']:.2f}  (Ask price used ✅)",
+        f"💰 Price     : ${best['Option Price']:.2f}",
         f"🔺 Delta     : {best['Delta']:.3f}",
         f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
         f"💎 Premium/Risk: {premium_risk:.2f}"
