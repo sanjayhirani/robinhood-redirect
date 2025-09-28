@@ -1,21 +1,31 @@
-# test_robinhood_playwright_top3_debug.py
-import sys, subprocess, os, asyncio
-from playwright.async_api import async_playwright
+# test_robinhood_playwright_full.py
 
-# ------------------ AUTO-INSTALL PLAYWRIGHT ------------------
+import sys
+import subprocess
+import os
+import asyncio
+
+# ------------------ AUTO-INSTALL DEPENDENCIES ------------------
+def install_package(package):
+    print(f"Installing {package}...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
 try:
     import playwright
 except ImportError:
-    print("Playwright not found. Installing...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
+    install_package("playwright")
     import playwright
-    print("Installing Chromium browser for Playwright...")
-    subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
+
+# Ensure Chromium browser is installed
+subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
 
 # ------------------ CONFIG ------------------
 TICKER = "RXRX"  # test ticker
 RH_USERNAME = os.environ.get("RH_USERNAME")
 RH_PASSWORD = os.environ.get("RH_PASSWORD")
+
+if not RH_USERNAME or not RH_PASSWORD:
+    raise ValueError("RH_USERNAME and RH_PASSWORD environment variables must be set.")
 
 # ------------------ SCRAPER ------------------
 async def scrape_option_data(page, ticker):
@@ -23,7 +33,6 @@ async def scrape_option_data(page, ticker):
     print(f"Navigated to {page.url}")
 
     try:
-        # Wait for at least one option row to appear
         await page.wait_for_selector("span[class*='strikePrice']", timeout=10000)
         print("Option data appears to be loaded.")
     except:
@@ -63,8 +72,10 @@ async def scrape_option_data(page, ticker):
 
 # ------------------ MAIN ------------------
 async def main():
+    from playwright.async_api import async_playwright
+
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=False)  # use headful to debug
+        browser = await pw.chromium.launch(headless=True)
         page = await browser.new_page()
 
         # Login
@@ -115,5 +126,6 @@ async def main():
 
         await browser.close()
 
-# Run
-asyncio.run(main())
+# ------------------ RUN ------------------
+if __name__ == "__main__":
+    asyncio.run(main())
