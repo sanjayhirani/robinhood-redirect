@@ -81,44 +81,44 @@ cutoff = today + timedelta(days=EXPIRY_LIMIT_DAYS)
 # ------------------ TEST MODE: MOCK OWNED POSITIONS ------------------
 mock_owned = {t: 100 for t in TICKERS}
 
+# ------------------ MAIN ------------------
+safe_tickers = []
+risky_msgs = []
+
 for TICKER in TICKERS:
     try:
         shares_owned = mock_owned.get(TICKER, 0)
         if shares_owned < 100:
-            send_telegram_message(f"⚠️ {TICKER} has less than 100 shares. Skipping.")
+            risky_msgs.append(f"⚠️ {TICKER} has less than 100 shares.")
             continue
+        safe_tickers.append(TICKER)
+    except:
+        risky_msgs.append(f"⚠️ Could not verify {TICKER}")
 
+# ------------------ SEND RISK SUMMARY ------------------
+safe_count = len(safe_tickers)
+risky_count = len(risky_msgs)
+summary_lines = []
+if risky_msgs:
+    summary_lines.append("⚠️ <b>Risky Tickers</b>\n" + "\n".join(risky_msgs))
+else:
+    summary_lines.append("⚠️ <b>No risky tickers found 🎉</b>")
+
+if safe_tickers:
+    safe_bold = [f"<b>{t}</b>" for t in safe_tickers]
+    safe_rows = [", ".join(safe_bold[i:i+4]) for i in range(0, len(safe_bold), 4)]
+    summary_lines.append("✅ <b>Safe Tickers</b>\n" + "\n".join(safe_rows))
+
+summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
+send_telegram_message("\n".join(summary_lines))
+
+# ------------------ PROCESS EACH SAFE TICKER ------------------
+for TICKER in safe_tickers:
+    try:
         current_price = float(r.stocks.get_latest_price(TICKER)[0])
         rh_url = f"https://robinhood.com/stocks/{TICKER}"
 
-        # ------------------ PART 1: Earnings / Dividend ------------------
-        stock = yf.Ticker(TICKER)
-        risky_msgs = []
-        has_event = False
-
-        # Dividend
-        try:
-            if not stock.dividends.empty:
-                div_date = stock.dividends.index[-1].date()
-                if today <= div_date <= cutoff:
-                    risky_msgs.append(f"⚠️ 💰 Dividend on {div_date.strftime('%d-%m-%y')}")
-                    has_event = True
-        except: pass
-
-        # Earnings
-        try:
-            earnings_dates = stock.get_earnings_dates(limit=2)
-            if not earnings_dates.empty:
-                earnings_date = earnings_dates.index.min().date()
-                if today <= earnings_date <= cutoff:
-                    risky_msgs.append(f"⚠️ 📢 Earnings on {earnings_date.strftime('%d-%m-%y')}")
-                    has_event = True
-        except: pass
-
-        if has_event:
-            send_telegram_message(f"⚠️ <b>{TICKER}</b>\n" + "\n".join(risky_msgs))
-
-        # ------------------ PART 2: Historicals ------------------
+        # ------------------ Historicals ------------------
         historicals = r.stocks.get_stock_historicals(TICKER, interval='day', span='month', bounds='regular')
         df = pd.DataFrame(historicals)
         df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
@@ -139,11 +139,7 @@ for TICKER in TICKERS:
         distance_from_high = month_high - current_price
         distance_pct = distance_from_high / month_high
 
-        # ---- risk alert based on 1M high proximity ----
-        if distance_pct < 0.05:
-            send_telegram_message(f"⚠️ {TICKER} is close to its 1M high ({distance_pct*100:.2f}%)")
-
-        # ------------------ PART 3: Option Chain ------------------
+        # ------------------ Options ------------------
         all_calls = r.options.find_tradable_options(TICKER, optionType="call")
         exp_dates = sorted(set([opt['expiration_date'] for opt in all_calls]))
         exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff]
@@ -178,32 +174,38 @@ for TICKER in TICKERS:
                         "URL": rh_url
                     })
 
-        # ---- individual combined alert for top 3 strikes ----
+        # ------------------ Individual alert (top 3) ------------------
         selected_calls = sorted(candidate_calls, key=lambda x: x['COP Short'], reverse=True)[:NUM_CALLS]
         if selected_calls:
-            msg = [f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}"]
-            msg.append(f"💹 1M High: ${month_high:.2f}\n")
+            msg_lines = [f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}",
+                         f"💹 1M High: ${month_high:.2f}\n"]
             for c in selected_calls:
-                msg.append(
-                    f"📅 {c['Expiration Date']} | 💲 {c['Strike Price']} | 💰 {c['Bid Price']:.2f} | "
-                    f"🔺 {c['Delta']:.3f} | 🎯 {c['COP Short']*100:.2f}% | 📉 {c['Distance From High %']*100:.2f}%"
+                msg_lines.append(
+                    f"Expiration: {c['Expiration Date']}\n"
+                    f"Strike: ${c['Strike Price']}\n"
+                    f"Bid Price: ${c['Bid Price']:.2f}\n"
+                    f"Delta: {c['Delta']:.3f}\n"
+                    f"Chance of Profit (Short): {c['COP Short']*100:.2f}%\n"
+                    f"Distance from 1M High: {c['Distance From High %']*100:.2f}%\n"
+                    "-------------------"
                 )
             buf = plot_candlestick(df, current_price, last_14_high, show_strikes=False)
-            send_telegram_photo(buf, "\n".join(msg))
+            send_telegram_photo(buf, "\n".join(msg_lines))
 
-        # ---- best alert ----
+        # ------------------ Best alert ------------------
         if selected_calls:
             best = max(selected_calls, key=lambda x: x['COP Short'])
-            msg = [
+            msg_lines = [
                 "🔥 <b>Best Covered Call</b>:",
                 f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Current Price']:.2f}",
                 f"✅ Exp: {best['Expiration Date']} | 💲 Strike: {best['Strike Price']}",
-                f"💰 Bid: {best['Bid Price']:.2f} | 🔺 Delta: {best['Delta']:.3f}",
+                f"💰 Bid: ${best['Bid Price']:.2f} | 🔺 Delta: {best['Delta']:.3f}",
                 f"🎯 COP Short: {best['COP Short']*100:.2f}%",
                 f"📉 Dist. from 1M High: {best['Distance From High %']*100:.2f}%"
             ]
-            buf = plot_candlestick(df, best['Current Price'], last_14_high, [best['Strike Price']], best['Expiration Date'], show_strikes=True)
-            send_telegram_photo(buf, "\n".join(msg))
+            buf = plot_candlestick(df, best['Current Price'], last_14_high,
+                                   [best['Strike Price']], best['Expiration Date'], show_strikes=True)
+            send_telegram_photo(buf, "\n".join(msg_lines))
 
     except Exception as e:
         send_telegram_message(f"⚠️ Error on {TICKER}: {e}")
