@@ -1,24 +1,5 @@
-# robinhood_sell_puts_full_final.py
+# robinhood_puts_full_final.py
 
-# ------------------ AUTO-INSTALL DEPENDENCIES ------------------
-import sys
-import subprocess
-
-try:
-    import yfinance
-except ImportError:
-    print("yfinance not found. Installing...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance"])
-    import yfinance
-
-try:
-    import lxml
-except ImportError:
-    print("lxml not found. Installing...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "lxml"])
-    import lxml
-
-# ------------------ OTHER IMPORTS ------------------
 import os, requests, io
 from datetime import datetime, timedelta
 import numpy as np
@@ -201,23 +182,19 @@ for ticker in safe_tickers:
 
             # Ask price
             try:
-                price = float(md.get('ask_price') or md.get('last_trade_price') or 0.0)
-                if price < MIN_PRICE:
-                    continue
+                price = float(md.get('ask_price') or 0.0)
+                if price < MIN_PRICE: continue
             except: continue
 
             # Chance of Profit
             try:
                 cop_str = md.get('chance_of_profit_long')
-                if cop_str is None:
-                    prob_OTM = 0.0
-                else:
-                    cop_clean = str(cop_str).replace('%','').replace(',','').strip()
-                    prob_OTM = float(cop_clean)/100
+                cop_clean = str(cop_str).replace('%','').replace(',','').strip()
+                prob_OTM = float(cop_clean)/100
             except:
                 prob_OTM = 0.0
 
-            # Delta (optional)
+            # Delta
             try: delta = float(md.get('delta') or 0.0)
             except: delta = 0.0
 
@@ -260,22 +237,24 @@ for ticker in safe_tickers:
 # ------------------ BEST OPTION ALERT ------------------
 valid_best = [opt for opt in all_options if opt['Option Price'] >= BEST_MIN_PRICE and opt['Prob OTM'] >= BEST_MIN_PROB]
 if not valid_best and all_options:
-    # fallback to closest one
     best = max(all_options, key=lambda x: x['Prob OTM'])
-else:
+elif valid_best:
     best = max(valid_best, key=lambda x: x['Prob OTM'])
+else:
+    best = None
 
-exp_fmt = datetime.strptime(best['Expiration Date'], "%Y-%m-%d").strftime("%d-%m-%y")
-msg_lines = [
-    "🔥 <b>Best Option to Sell</b>:",
-    f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Stock Price']:.2f}",
-    f"✅ Expiration : {exp_fmt}",
-    f"💲 Strike    : ${best['Strike Price']}",
-    f"💰 Price     : ${best['Option Price']:.2f}",
-    f"🔺 Delta     : {best['Delta']:.3f}",
-    f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
-    f"💎 Premium/Risk: {best['Premium/Risk']:.2f}"
-]
-buf = plot_candlestick(best['HistoricalDF'], best['Stock Price'], best['Last14Low'],
-                        best['Strike Price'], best['Expiration Date'])
-send_telegram_photo(buf, "\n".join(msg_lines))
+if best:
+    exp_fmt = datetime.strptime(best['Expiration Date'], "%Y-%m-%d").strftime("%d-%m-%y")
+    msg_lines = [
+        "🔥 <b>Best Option to Sell</b>:",
+        f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Stock Price']:.2f}",
+        f"✅ Expiration : {exp_fmt}",
+        f"💲 Strike    : ${best['Strike Price']}",
+        f"💰 Price     : ${best['Option Price']:.2f}",
+        f"🔺 Delta     : {best['Delta']:.3f}",
+        f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
+        f"💎 Premium/Risk: {best['Premium/Risk']:.2f}"
+    ]
+    buf = plot_candlestick(best['HistoricalDF'], best['Stock Price'], best['Last14Low'],
+                            best['Strike Price'], best['Expiration Date'])
+    send_telegram_photo(buf, "\n".join(msg_lines))
