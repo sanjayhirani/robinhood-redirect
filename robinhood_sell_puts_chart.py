@@ -1,4 +1,4 @@
-# robinhood_puts_optimized_final.py
+# robinhood_puts_final_prob_fix.py
 
 import sys
 import subprocess
@@ -190,15 +190,22 @@ for ticker in safe_tickers:
             if not market_data: continue
             md = market_data[0]
 
+            # Ask price
             try:
                 price = float(md.get('ask_price') or 0.0)
                 if price < MIN_PRICE: continue
             except: continue
 
-            try:
-                cop = md.get('chance_of_profit_long')
-                prob_OTM = int(str(cop).replace('%','').strip())
-            except: prob_OTM = 0
+            # Prob OTM using Robinhood's chance_of_profit_long
+            cop = md.get('chance_of_profit_long') or md.get('chance_of_profit_short')
+            if cop:
+                try:
+                    prob_OTM = int(float(str(cop).replace('%','').strip()))
+                except:
+                    prob_OTM = 0
+            else:
+                delta = float(md.get('delta') or 0.0)
+                prob_OTM = int((1-abs(delta))*100)
 
             try: delta = float(md.get('delta') or 0.0)
             except: delta = 0.0
