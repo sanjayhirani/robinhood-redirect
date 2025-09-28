@@ -1,5 +1,26 @@
 # robinhood_sell_puts_full_final.py
 
+# ------------------ AUTO-INSTALL DEPENDENCIES ------------------
+import sys
+import subprocess
+
+# Auto-install yfinance
+try:
+    import yfinance
+except ImportError:
+    print("yfinance not found. Installing...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance"])
+    import yfinance
+
+# Auto-install lxml
+try:
+    import lxml
+except ImportError:
+    print("lxml not found. Installing...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "lxml"])
+    import lxml
+
+# ------------------ OTHER IMPORTS ------------------
 import os, requests, io
 from datetime import datetime, timedelta
 import numpy as np
