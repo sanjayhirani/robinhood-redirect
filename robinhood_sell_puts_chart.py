@@ -1,4 +1,4 @@
-# test_robinhood_playwright_one_ticker.py
+# test_robinhood_playwright_top3.py
 
 # ------------------ AUTO-INSTALL PLAYWRIGHT ------------------
 import sys, subprocess
@@ -26,7 +26,6 @@ async def scrape_option_data(page, ticker):
     await page.goto(f"https://robinhood.com/stocks/{ticker}/options")
     await page.wait_for_timeout(5000)  # wait for options to load
 
-    # Update selectors if needed based on Robinhood live DOM
     rows = await page.query_selector_all("div[class*='optionsRow']")
     results = []
 
@@ -59,20 +58,32 @@ async def scrape_option_data(page, ticker):
 # ------------------ MAIN ------------------
 async def main():
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=False)  # headless=True for headless
+        browser = await pw.chromium.launch(headless=True)  # headless for CI / GitHub Actions
         page = await browser.new_page()
 
-        # Login using username/password
+        # Login
         await page.goto("https://robinhood.com/login")
         await page.fill("input[name='username']", RH_USERNAME)
         await page.fill("input[name='password']", RH_PASSWORD)
         await page.click("button[type='submit']")
-        await page.wait_for_timeout(10000)  # handle 2FA manually once
+        await page.wait_for_timeout(10000)  # handle 2FA manually if needed
 
         # Scrape options
         options = await scrape_option_data(page, TICKER)
-        print(f"Found {len(options)} options for {TICKER}")
-        for opt in options:
+
+        # Get current stock price
+        await page.goto(f"https://robinhood.com/stocks/{TICKER}")
+        await page.wait_for_timeout(3000)
+        current_price_el = await page.query_selector("span[data-testid='StockPrice']")
+        current_price = float(await current_price_el.inner_text()) if current_price_el else 0
+
+        # Filter puts below current price and get top 3
+        puts_below = [opt for opt in options if opt["Strike"] < current_price]
+        top3_puts = sorted(puts_below, key=lambda x: x["Strike"], reverse=True)[:3]
+
+        print(f"Current price: ${current_price}")
+        print(f"Top 3 puts below current price for {TICKER}:")
+        for opt in top3_puts:
             print(opt)
 
         await browser.close()
