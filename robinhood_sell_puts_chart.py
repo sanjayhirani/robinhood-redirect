@@ -4,7 +4,6 @@
 import sys
 import subprocess
 
-# Auto-install yfinance
 try:
     import yfinance
 except ImportError:
@@ -12,7 +11,6 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance"])
     import yfinance
 
-# Auto-install lxml
 try:
     import lxml
 except ImportError:
@@ -83,7 +81,7 @@ def send_telegram_message(msg):
         data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     )
 
-def plot_candlestick(df, current_price, last_14_low, strike_price=None, exp_date=None):
+def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_date=None):
     fig, ax = plt.subplots(figsize=(12,6))
     fig.patch.set_facecolor('black')
     ax.set_facecolor('black')
@@ -99,12 +97,16 @@ def plot_candlestick(df, current_price, last_14_low, strike_price=None, exp_date
                  [df['low'].iloc[i], df['high'].iloc[i]], color=color, linewidth=1)
     ax.axhline(current_price, color='magenta', linestyle='--', linewidth=1.5, label=f'Current: ${current_price:.2f}')
     ax.axhline(last_14_low, color='yellow', linestyle='--', linewidth=2, label=f'14-day Low: ${last_14_low:.2f}')
-    if strike_price is not None:
-        ax.axhline(strike_price, color='cyan', linestyle='--', linewidth=1.5, label=f'Strike: ${strike_price:.2f}')
+    
+    if selected_strikes:
+        for strike in selected_strikes:
+            ax.axhline(strike, color='cyan', linestyle='--', linewidth=1.5, label=f'Strike: ${strike:.2f}')
+    
     if exp_date is not None:
         exp_date_obj = pd.to_datetime(exp_date).tz_localize(None)
         if df.index.min() <= exp_date_obj <= df.index.max():
             ax.axvline(mdates.date2num(exp_date_obj), color='orange', linestyle='--', linewidth=2, label=f'Expiration: {exp_date_obj.strftime("%d-%m-%y")}')
+    
     ax.set_ylabel('Price ($)', color='white')
     ax.tick_params(colors='white')
     ax.grid(True, color='gray', linestyle='--', alpha=0.3)
@@ -168,7 +170,6 @@ for ticker in TICKERS:
         risky_msgs.append(f"⚠️ <b>{ticker}</b> error: {e}")
         risky_count += 1
 
-# Send Earnings/Dividends alert first
 summary_lines = []
 if risky_msgs:
     summary_lines.append("⚠️ <b>Risky Tickers</b>\n" + "\n".join(risky_msgs) + "\n")
@@ -186,7 +187,7 @@ send_telegram_message("\n".join(summary_lines))
 
 # ------------------ PART 2: ROBINHOOD OPTIONS ------------------
 all_options = []
-for TICKER in safe_tickers:  # only safe tickers
+for TICKER in safe_tickers:
     try:
         current_price = float(r.stocks.get_latest_price(TICKER)[0])
         rh_url = f"https://robinhood.com/stocks/{TICKER}"
@@ -209,9 +210,9 @@ for TICKER in safe_tickers:  # only safe tickers
         month_high = df['close'].max()
         month_low = df['close'].min()
         last_14_low = df['low'][-LOW_DAYS:].min()
+        distance_from_low = current_price - month_low
+        distance_pct = distance_from_low / month_low
         proximity = "🔺 Closer to 1M High" if abs(current_price - month_high) < abs(current_price - month_low) else "🔻 Closer to 1M Low"
-
-        buf = plot_candlestick(df, current_price, last_14_low)
 
         all_puts = r.options.find_tradable_options(TICKER, optionType="put")
         exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))[:NUM_EXPIRATIONS]
@@ -224,9 +225,14 @@ for TICKER in safe_tickers:  # only safe tickers
             T = max((exp_date_obj - today).days / 365, 1/365)
             puts_for_exp = [opt for opt in all_puts if opt['expiration_date'] == exp_date]
 
+            strikes_below = sorted([float(opt['strike_price']) for opt in puts_for_exp if float(opt['strike_price']) < current_price], reverse=True)
+            closest_strikes = strikes_below[:3]
+
             for opt in puts_for_exp:
                 strike = float(opt['strike_price'])
-                if strike >= current_price: continue
+                if strike not in closest_strikes:
+                    continue
+
                 option_id = opt['id']
                 market_data = r.options.get_option_market_data_by_id(option_id)
 
@@ -242,15 +248,19 @@ for TICKER in safe_tickers:  # only safe tickers
                 price = max(price - PRICE_ADJUST,0.0)
                 if price>=MIN_PRICE:
                     prob_OTM = 1 - abs(delta)
+                    risk = max(current_price - strike, 0.01)
+                    profit_risk = price / risk
                     candidate_puts.append({
                         "Ticker": TICKER, "Current Price": current_price, "Expiration Date": exp_date,
-                        "Strike Price": strike, "Option Price": price, "Delta": delta, "Prob OTM": prob_OTM,
-                        "URL": rh_url
+                        "Strike Price": strike, "Option Price": price, "Delta": delta,
+                        "Prob OTM": prob_OTM, "Profit/Risk": profit_risk, "URL": rh_url,
+                        "Month Low": month_low, "Distance From Low $": distance_from_low, "Distance From Low %": distance_pct
                     })
 
-        selected_puts = sorted(candidate_puts, key=lambda x:x['Prob OTM'], reverse=True)[:NUM_PUTS]
+        selected_puts = sorted(candidate_puts, key=lambda x:x['Profit/Risk'], reverse=True)[:NUM_PUTS]
         all_options.extend(selected_puts)
 
+        selected_strikes = [p['Strike Price'] for p in selected_puts]
         msg_lines = [
             f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}",
             f"💹 1M High: ${month_high:.2f}", f"📉 1M Low: ${month_low:.2f}",
@@ -261,8 +271,11 @@ for TICKER in safe_tickers:  # only safe tickers
             msg_lines.append(f"💲 Strike: {opt['Strike Price']}")
             msg_lines.append(f"💰 Price : ${opt['Option Price']:.2f}")
             msg_lines.append(f"🔺 Delta : {opt['Delta']:.3f}")
-            msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%\n")
+            msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%")
+            msg_lines.append(f"💎 Premium/Risk: {opt['Profit/Risk']:.2f}")
+            msg_lines.append(f"📉 Dist. from 1M Low: {opt['Distance From Low %']*100:.1f}%\n")
 
+        buf = plot_candlestick(df, current_price, last_14_low, selected_strikes)
         send_telegram_photo(buf, "\n".join(msg_lines))
 
     except Exception as e:
@@ -270,8 +283,9 @@ for TICKER in safe_tickers:  # only safe tickers
 
 # ------------------ BEST OPTION ALERT ------------------
 if all_options:
-    best = max(all_options, key=lambda x:x['Prob OTM'])
-    premium_risk = best['Option Price'] / max(best['Current Price'] - best['Strike Price'], 0.01)
+    best = max(all_options, key=lambda x: (x['Profit/Risk'], x['Distance From Low %']))
+    premium_risk = best['Profit/Risk']
+
     msg_lines = [
         "🔥 <b>Best Option to Sell</b>:",
         f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Current Price']:.2f}",
@@ -280,7 +294,8 @@ if all_options:
         f"💰 Price     : ${best['Option Price']:.2f}",
         f"🔺 Delta     : {best['Delta']:.3f}",
         f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
-        f"💎 Premium/Risk: {premium_risk:.2f}"
+        f"💎 Premium/Risk: {premium_risk:.2f}",
+        f"📉 Dist. from 1M Low: {best['Distance From Low %']*100:.1f}%"
     ]
 
     historicals = r.stocks.get_stock_historicals(best['Ticker'], interval='day', span='month', bounds='regular')
@@ -299,6 +314,5 @@ if all_options:
     df['volume'] = df['volume'].fillna(0)
 
     last_14_low = df['low'][-LOW_DAYS:].min()
-    buf = plot_candlestick(df, best['Current Price'], last_14_low, best['Strike Price'], best['Expiration Date'])
+    buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
-
