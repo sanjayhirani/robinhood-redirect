@@ -4,34 +4,35 @@
 import sys
 import subprocess
 
-# Auto-install yfinance
-try:
-    import yfinance
-except ImportError:
-    print("yfinance not found. Installing...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance"])
-    import yfinance
+def install_package(package):
+    try:
+        __import__(package)
+    except ImportError:
+        print(f"{package} not found. Installing...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
-# Auto-install lxml
-try:
-    import lxml
-except ImportError:
-    print("lxml not found. Installing...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "lxml"])
-    import lxml
+install_package("yfinance")
+install_package("lxml")
+install_package("robin_stocks")
+install_package("numpy")
+install_package("scipy")
+install_package("pandas")
+install_package("matplotlib")
+install_package("requests")
 
-# ------------------ OTHER IMPORTS ------------------
+# ------------------ IMPORTS ------------------
 import os
 import requests
 import robin_stocks.robinhood as r
+import yfinance as yf
 from datetime import datetime, timedelta
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import io
 from math import log, sqrt
 from scipy.stats import norm
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import io
 
 # ------------------ CONFIG ------------------
 TICKERS = ["TLRY", "PLUG", "BITF", "BBAI", "SPCE", "ONDS", "GRAB", "LUMN",
@@ -132,7 +133,7 @@ risky_count = 0
 
 for ticker in TICKERS:
     try:
-        stock = yfinance.Ticker(ticker)
+        stock = yf.Ticker(ticker)
         msg_parts = [f"📊 <b>{ticker}</b>"]
         has_event = False
 
@@ -191,6 +192,7 @@ for TICKER in safe_tickers:  # only safe tickers
         current_price = float(r.stocks.get_latest_price(TICKER)[0])
         rh_url = f"https://robinhood.com/stocks/{TICKER}"
 
+        # Fetch historicals for volatility & plotting
         historicals = r.stocks.get_stock_historicals(TICKER, interval='day', span='month', bounds='regular')
         df = pd.DataFrame(historicals)
         df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
@@ -213,11 +215,11 @@ for TICKER in safe_tickers:  # only safe tickers
 
         buf = plot_candlestick(df, current_price, last_14_low)
 
+        # ------------------ Fetch Options Correctly ------------------
         all_puts = r.options.find_tradable_options(TICKER, optionType="put")
         exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))[:NUM_EXPIRATIONS]
 
         candidate_puts = []
-        sigma = historical_volatility(df['close'].values, HV_PERIOD)
 
         for exp_date in exp_dates:
             exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
@@ -230,23 +232,30 @@ for TICKER in safe_tickers:  # only safe tickers
                 option_id = opt['id']
                 market_data = r.options.get_option_market_data_by_id(option_id)
 
-                price, delta = 0.0, -1.0
+                price = 0.0
+                delta = None
                 if market_data:
                     try: price = float(market_data[0].get('adjusted_mark_price') or market_data[0].get('mark_price') or 0.0)
                     except: price=0.0
                     try: delta = float(market_data[0].get('delta')) if market_data[0].get('delta') else None
                     except: delta=None
+
                     if delta is None or delta==0.0:
+                        closes = df['close'].values
+                        log_returns = np.diff(np.log(closes))
+                        sigma = np.std(log_returns[-HV_PERIOD:]) * np.sqrt(252)
                         delta = black_scholes_put_delta(current_price, strike, T, RISK_FREE_RATE, sigma)
 
                 price = max(price - PRICE_ADJUST,0.0)
-                if price>=MIN_PRICE:
-                    prob_OTM = 1 - abs(delta)
-                    candidate_puts.append({
-                        "Ticker": TICKER, "Current Price": current_price, "Expiration Date": exp_date,
-                        "Strike Price": strike, "Option Price": price, "Delta": delta, "Prob OTM": prob_OTM,
-                        "URL": rh_url
-                    })
+                if price < MIN_PRICE:
+                    continue
+
+                prob_OTM = 1 - abs(delta)
+                candidate_puts.append({
+                    "Ticker": TICKER, "Current Price": current_price, "Expiration Date": exp_date,
+                    "Strike Price": strike, "Option Price": price, "Delta": delta, "Prob OTM": prob_OTM,
+                    "URL": rh_url
+                })
 
         selected_puts = sorted(candidate_puts, key=lambda x:x['Prob OTM'], reverse=True)[:NUM_PUTS]
         all_options.extend(selected_puts)
@@ -282,21 +291,6 @@ if all_options:
         f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
         f"💎 Premium/Risk: {premium_risk:.2f}"
     ]
-
-    historicals = r.stocks.get_stock_historicals(best['Ticker'], interval='day', span='month', bounds='regular')
-    df = pd.DataFrame(historicals)
-    df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
-    df.set_index('begins_at', inplace=True)
-    df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
-    df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
-    all_days = pd.date_range(start=df.index.min(), end=df.index.max(), freq='B')
-    df = df.reindex(all_days)
-    df.index = df.index.tz_localize(None)
-    df['close'] = df['close'].ffill()
-    df['open'] = df['open'].fillna(df['close'])
-    df['high'] = df['high'].fillna(df[['open','close']].max(axis=1))
-    df['low'] = df['low'].fillna(df[['open','close']].min(axis=1))
-    df['volume'] = df['volume'].fillna(0)
 
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, best['Strike Price'], best['Expiration Date'])
