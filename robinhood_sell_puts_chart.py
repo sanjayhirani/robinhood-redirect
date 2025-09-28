@@ -1,4 +1,4 @@
-# robinhood_sell_puts_with_risk.py
+# robinhood_sell_puts_with_risk_fixed.py
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 import sys
@@ -44,6 +44,7 @@ MIN_PRICE = 0.15
 HV_PERIOD = 21
 CANDLE_WIDTH = 0.6
 LOW_DAYS = 14
+MIN_PREMIUM_RISK = 0.1  # avoid options with very low premium/risk
 
 # ------------------ SECRETS ------------------
 USERNAME = os.environ["RH_USERNAME"]
@@ -232,20 +233,24 @@ for TICKER in safe_tickers:  # only safe tickers
 
                 price, delta = 0.0, -1.0
                 if market_data:
-                    try: price = float(market_data[0].get('adjusted_mark_price') or market_data[0].get('mark_price') or 0.0)
-                    except: price=0.0
+                    try:
+                        bid = float(market_data[0].get('bid_price') or 0.0)
+                        ask = float(market_data[0].get('ask_price') or 0.0)
+                        last = float(market_data[0].get('last_trade_price') or 0.0)
+                        price = max(last if last>0 else (bid+ask)/2 - PRICE_ADJUST, 0.0)
+                    except: price = 0.0
                     try: delta = float(market_data[0].get('delta')) if market_data[0].get('delta') else None
                     except: delta=None
                     if delta is None or delta==0.0:
                         delta = black_scholes_put_delta(current_price, strike, T, RISK_FREE_RATE, sigma)
 
-                price = max(price - PRICE_ADJUST,0.0)
-                if price>=MIN_PRICE:
+                premium_risk = price / max(current_price - strike, 0.01)
+                if price>=MIN_PRICE and premium_risk>=MIN_PREMIUM_RISK:
                     prob_OTM = 1 - abs(delta)
                     candidate_puts.append({
                         "Ticker": TICKER, "Current Price": current_price, "Expiration Date": exp_date,
                         "Strike Price": strike, "Option Price": price, "Delta": delta, "Prob OTM": prob_OTM,
-                        "URL": rh_url
+                        "Premium/Risk": premium_risk, "URL": rh_url
                     })
 
         selected_puts = sorted(candidate_puts, key=lambda x:x['Prob OTM'], reverse=True)[:NUM_PUTS]
@@ -261,7 +266,8 @@ for TICKER in safe_tickers:  # only safe tickers
             msg_lines.append(f"💲 Strike: {opt['Strike Price']}")
             msg_lines.append(f"💰 Price : £{opt['Option Price']:.2f}")
             msg_lines.append(f"🔺 Delta : {opt['Delta']:.3f}")
-            msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%\n")
+            msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%")
+            msg_lines.append(f"💎 Premium/Risk: {opt['Premium/Risk']:.2f}\n")
 
         send_telegram_photo(buf, "\n".join(msg_lines))
 
@@ -271,7 +277,6 @@ for TICKER in safe_tickers:  # only safe tickers
 # ------------------ BEST OPTION ALERT ------------------
 if all_options:
     best = max(all_options, key=lambda x:x['Prob OTM'])
-    premium_risk = best['Option Price'] / max(best['Current Price'] - best['Strike Price'], 0.01)
     msg_lines = [
         "🔥 <b>Best Option to Sell</b>:",
         f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: £{best['Current Price']:.2f}",
@@ -280,7 +285,7 @@ if all_options:
         f"💰 Price     : £{best['Option Price']:.2f}",
         f"🔺 Delta     : {best['Delta']:.3f}",
         f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
-        f"💎 Premium/Risk: {premium_risk:.2f}"
+        f"💎 Premium/Risk: {best['Premium/Risk']:.2f}"
     ]
 
     historicals = r.stocks.get_stock_historicals(best['Ticker'], interval='day', span='month', bounds='regular')
