@@ -20,8 +20,8 @@ EXPIRY_LIMIT_DAYS = 21
 NUM_CALLS = 3  # top strikes per ticker
 
 # ------------------ SECRETS ------------------
-USERNAME = "your_rh_username"
-PASSWORD = "your_rh_password"
+USERNAME = os.environ["RH_USERNAME"]
+PASSWORD = os.environ["RH_PASSWORD"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
