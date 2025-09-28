@@ -31,7 +31,8 @@ import pandas as pd
 
 # ------------------ CONFIG ------------------
 NUM_EXPIRATIONS = 3
-NUM_CALLS = 2
+NUM_STRIKES_TO_SCAN = 3
+IGNORE_STRIKES = 2  # first 2 strikes above current price ignored
 PRICE_ADJUST = 0.01
 RISK_FREE_RATE = 0.05
 MIN_PRICE = 0.10
@@ -175,11 +176,13 @@ for TICKER in safe_tickers:
         candidate_calls = []
         sigma = historical_volatility(df['close'].values, HV_PERIOD)
 
-        # ------------------ Collect all candidate calls ------------------
+        # ------------------ Collect candidate calls ignoring first 2 strikes ------------------
         for exp_date in exp_dates:
             calls_for_exp = [opt for opt in all_calls if opt['expiration_date'] == exp_date]
             strikes_above = sorted([float(opt['strike_price']) for opt in calls_for_exp if float(opt['strike_price']) > current_price])
-            closest_strikes = strikes_above[:4]  # top 4 strikes above price
+            if len(strikes_above) <= IGNORE_STRIKES:
+                continue
+            closest_strikes = strikes_above[IGNORE_STRIKES:IGNORE_STRIKES+NUM_STRIKES_TO_SCAN]
 
             for opt in calls_for_exp:
                 strike = float(opt['strike_price'])
@@ -216,39 +219,41 @@ for TICKER in safe_tickers:
                     "Distance From High %": distance_pct
                 })
 
-        # ------------------ Select top 2 calls overall -----------------
-        final_selected_calls = sorted(candidate_calls, key=lambda x: x['Score'], reverse=True)[:NUM_CALLS]
-        all_options.extend(final_selected_calls)
+        if not candidate_calls:
+            send_telegram_message(f"⚠️ No suitable strikes found for {TICKER}")
+            continue
 
-        # ------------------ Telegram text alert (top 2 calls) -----------------
-        msg_lines = [f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}",
-                     f"💹 1M High: ${month_high:.2f}", f"📌 Proximity: {proximity}\n"]
-        for opt in final_selected_calls:
-            msg_lines.append(f"{risk_emoji(opt['Prob ITM'])} 📅 Exp: {opt['Expiration Date']}")
-            msg_lines.append(f"💲 Strike: {opt['Strike Price']}")
-            msg_lines.append(f"💰 Price : ${opt['Option Price']:.2f}")
-            msg_lines.append(f"🔺 Delta : {opt['Delta']:.3f}")
-            msg_lines.append(f"🎯 Prob ITM  : {opt['Prob ITM']*100:.1f}%")
-            msg_lines.append(f"💎 Premium / Prob ITM: {opt['Score']*100:.2f}%")
-            msg_lines.append(f"📉 Dist. from 1M High: {opt['Distance From High %']*100:.1f}%\n")
-        send_telegram_message("\n".join(msg_lines))
+        # ------------------ Telegram alert for all 3 strikes -----------------
+        strikes_msg = []
+        selected_strikes = []
+        for opt in candidate_calls:
+            selected_strikes.append(opt['Strike Price'])
+            strikes_msg.append(f"{risk_emoji(opt['Prob ITM'])} 📅 Exp: {opt['Expiration Date']}")
+            strikes_msg.append(f"💲 Strike: {opt['Strike Price']}")
+            strikes_msg.append(f"💰 Price : ${opt['Option Price']:.2f}")
+            strikes_msg.append(f"🔺 Delta : {opt['Delta']:.3f}")
+            strikes_msg.append(f"🎯 Prob ITM  : {opt['Prob ITM']*100:.1f}%")
+            strikes_msg.append(f"💎 Premium / Prob ITM: {opt['Score']*100:.2f}%")
+            strikes_msg.append(f"📉 Dist. from 1M High: {opt['Distance From High %']*100:.1f}%\n")
 
-        # ------------------ Chart + alert ONLY for best call -----------------
-        if final_selected_calls:
-            best_call = max(final_selected_calls, key=lambda x: x['Score'])
-            buf = plot_candlestick(df, best_call['Current Price'], last_30_high, [best_call['Strike Price']], best_call['Expiration Date'])
-            best_msg = [
-                "🔥 <b>Best Covered Call to Sell</b>:",
-                f"📊 <a href='{best_call['URL']}'>{best_call['Ticker']}</a> current: ${best_call['Current Price']:.2f}",
-                f"✅ Expiration : {best_call['Expiration Date']}",
-                f"💲 Strike    : {best_call['Strike Price']}",
-                f"💰 Price     : ${best_call['Option Price']:.2f}",
-                f"🔺 Delta     : {best_call['Delta']:.3f}",
-                f"🎯 Prob ITM  : {best_call['Prob ITM']*100:.1f}%",
-                f"💎 Premium / Prob ITM: {best_call['Score']*100:.2f}%",
-                f"📉 Dist. from 1M High: {best_call['Distance From High %']*100:.1f}%"
-            ]
-            send_telegram_photo(buf, "\n".join(best_msg))
+        buf = plot_candlestick(df, current_price, last_30_high, selected_strikes)
+        send_telegram_photo(buf, f"📊 <a href='{rh_url}'>{TICKER}</a> Candidate Covered Calls:\n" + "\n".join(strikes_msg))
+
+        # ------------------ Best call alert -----------------
+        best_call = max(candidate_calls, key=lambda x: x['Score'])
+        buf_best = plot_candlestick(df, best_call['Current Price'], last_30_high, [best_call['Strike Price']], best_call['Expiration Date'])
+        best_msg = [
+            "🔥 <b>Best Covered Call to Sell</b>:",
+            f"📊 <a href='{best_call['URL']}'>{best_call['Ticker']}</a> current: ${best_call['Current Price']:.2f}",
+            f"✅ Expiration : {best_call['Expiration Date']}",
+            f"💲 Strike    : {best_call['Strike Price']}",
+            f"💰 Price     : ${best_call['Option Price']:.2f}",
+            f"🔺 Delta     : {best_call['Delta']:.3f}",
+            f"🎯 Prob ITM  : {best_call['Prob ITM']*100:.1f}%",
+            f"💎 Premium / Prob ITM: {best_call['Score']*100:.2f}%",
+            f"📉 Dist. from 1M High: {best_call['Distance From High %']*100:.1f}%"
+        ]
+        send_telegram_photo(buf_best, "\n".join(best_msg))
 
     except Exception as e:
         send_telegram_message(f"⚠️ Error processing {TICKER}: {e}")
