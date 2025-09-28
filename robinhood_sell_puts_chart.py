@@ -32,8 +32,7 @@ import numpy as np
 import pandas as pd
 
 # ------------------ CONFIG ------------------
-TICKERS = ["TLRY", "PLUG", "BITF", "BBAI", "SPCE", "ONDS", "GRAB","LAC",
-           "RIG", "BB", "HTZ", "RXRX", "CLOV", "RZLV" ,"NVTS" ,"RR"]
+TICKERS = ["SNAP", "ACHR", "OPEN", "BBAI", "PTON", "ONDS", "GRAB", "LAC", "HTZ", "RZLV" ,"NVTS"]
 NUM_EXPIRATIONS = 3
 NUM_PUTS = 2
 PRICE_ADJUST = 0.01
@@ -316,4 +315,3 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
-
