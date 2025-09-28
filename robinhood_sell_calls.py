@@ -34,7 +34,7 @@ NUM_EXPIRATIONS = 3
 NUM_CALLS = 2
 PRICE_ADJUST = 0.01
 RISK_FREE_RATE = 0.05
-MIN_PRICE = 0.01
+MIN_PRICE = 0.10
 HV_PERIOD = 21
 CANDLE_WIDTH = 0.6
 LOW_DAYS = 14
@@ -179,7 +179,7 @@ for TICKER in safe_tickers:
         for exp_date in exp_dates:
             calls_for_exp = [opt for opt in all_calls if opt['expiration_date'] == exp_date]
             strikes_above = sorted([float(opt['strike_price']) for opt in calls_for_exp if float(opt['strike_price']) > current_price])
-            closest_strikes = strikes_above[:4]  # scan top 4 strikes
+            closest_strikes = strikes_above[:4]  # top 4 strikes above price
 
             for opt in calls_for_exp:
                 strike = float(opt['strike_price'])
@@ -200,17 +200,21 @@ for TICKER in safe_tickers:
                         delta = black_scholes_call_delta(current_price, strike, T, RISK_FREE_RATE, sigma)
 
                 price = max(price - PRICE_ADJUST,0.0)
-                if price >= MIN_PRICE:
-                    prob_ITM = delta
-                    # risk-adjusted expected premium % (like Robinhood app)
-                    expected_return_pct = (price / current_price) * (1 - prob_ITM)
-                    candidate_calls.append({
-                        "Ticker": TICKER, "Current Price": current_price, "Expiration Date": exp_date,
-                        "Strike Price": strike, "Option Price": price, "Delta": delta,
-                        "Prob ITM": prob_ITM, "Score": expected_return_pct, "URL": rh_url,
-                        "Month High": month_high, "Distance From High $": distance_from_high,
-                        "Distance From High %": distance_pct
-                    })
+                if price < MIN_PRICE:
+                    continue  # skip tiny premium
+
+                # profit % relative to stock
+                profit_pct = price / current_price
+                # risk-adjusted score: favors higher strikes and lower delta
+                risk_adjusted_score = profit_pct * (1 - delta)
+
+                candidate_calls.append({
+                    "Ticker": TICKER, "Current Price": current_price, "Expiration Date": exp_date,
+                    "Strike Price": strike, "Option Price": price, "Delta": delta,
+                    "Prob ITM": delta, "Score": risk_adjusted_score, "URL": rh_url,
+                    "Month High": month_high, "Distance From High $": distance_from_high,
+                    "Distance From High %": distance_pct
+                })
 
         # ------------------ Select top 2 calls overall -----------------
         final_selected_calls = sorted(candidate_calls, key=lambda x: x['Score'], reverse=True)[:NUM_CALLS]
