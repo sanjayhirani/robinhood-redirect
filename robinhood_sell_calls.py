@@ -190,7 +190,7 @@ for TICKER in safe_tickers:
             calls_for_exp = [opt for opt in all_calls if opt['expiration_date'] == exp_date]
 
             strikes_above = sorted([float(opt['strike_price']) for opt in calls_for_exp if float(opt['strike_price']) > current_price])
-            closest_strikes = strikes_above[:3]
+            closest_strikes = strikes_above[:4]
 
             for opt in calls_for_exp:
                 strike = float(opt['strike_price'])
