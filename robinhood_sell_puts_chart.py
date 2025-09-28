@@ -97,15 +97,15 @@ def plot_candlestick(df, current_price, last_14_low, strike_price=None, exp_date
         ))
         ax.plot([mdates.date2num(df.index[i]), mdates.date2num(df.index[i])],
                  [df['low'].iloc[i], df['high'].iloc[i]], color=color, linewidth=1)
-    ax.axhline(current_price, color='magenta', linestyle='--', linewidth=1.5, label=f'Current: £{current_price:.2f}')
-    ax.axhline(last_14_low, color='yellow', linestyle='--', linewidth=2, label=f'14-day Low: £{last_14_low:.2f}')
+    ax.axhline(current_price, color='magenta', linestyle='--', linewidth=1.5, label=f'Current: ${current_price:.2f}')
+    ax.axhline(last_14_low, color='yellow', linestyle='--', linewidth=2, label=f'14-day Low: ${last_14_low:.2f}')
     if strike_price is not None:
-        ax.axhline(strike_price, color='cyan', linestyle='--', linewidth=1.5, label=f'Strike: £{strike_price:.2f}')
+        ax.axhline(strike_price, color='cyan', linestyle='--', linewidth=1.5, label=f'Strike: ${strike_price:.2f}')
     if exp_date is not None:
         exp_date_obj = pd.to_datetime(exp_date).tz_localize(None)
         if df.index.min() <= exp_date_obj <= df.index.max():
             ax.axvline(mdates.date2num(exp_date_obj), color='orange', linestyle='--', linewidth=2, label=f'Expiration: {exp_date_obj.strftime("%d-%m-%y")}')
-    ax.set_ylabel('Price (£)', color='white')
+    ax.set_ylabel('Price ($)', color='white')
     ax.tick_params(colors='white')
     ax.grid(True, color='gray', linestyle='--', alpha=0.3)
     ax.legend(facecolor='black', edgecolor='white', labelcolor='white')
@@ -252,14 +252,14 @@ for TICKER in safe_tickers:  # only safe tickers
         all_options.extend(selected_puts)
 
         msg_lines = [
-            f"📊 <a href='{rh_url}'>{TICKER}</a> current: £{current_price:.2f}",
-            f"💹 1M High: £{month_high:.2f}", f"📉 1M Low: £{month_low:.2f}",
+            f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}",
+            f"💹 1M High: ${month_high:.2f}", f"📉 1M Low: ${month_low:.2f}",
             f"📌 Proximity: {proximity}\n"
         ]
         for opt in selected_puts:
             msg_lines.append(f"{risk_emoji(opt['Prob OTM'])} 📅 Exp: {opt['Expiration Date']}")
             msg_lines.append(f"💲 Strike: {opt['Strike Price']}")
-            msg_lines.append(f"💰 Price : £{opt['Option Price']:.2f}")
+            msg_lines.append(f"💰 Price : ${opt['Option Price']:.2f}")
             msg_lines.append(f"🔺 Delta : {opt['Delta']:.3f}")
             msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%\n")
 
@@ -274,10 +274,10 @@ if all_options:
     premium_risk = best['Option Price'] / max(best['Current Price'] - best['Strike Price'], 0.01)
     msg_lines = [
         "🔥 <b>Best Option to Sell</b>:",
-        f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: £{best['Current Price']:.2f}",
+        f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Current Price']:.2f}",
         f"✅ Expiration : {best['Expiration Date']}",
         f"💲 Strike    : {best['Strike Price']}",
-        f"💰 Price     : £{best['Option Price']:.2f}",
+        f"💰 Price     : ${best['Option Price']:.2f}",
         f"🔺 Delta     : {best['Delta']:.3f}",
         f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
         f"💎 Premium/Risk: {premium_risk:.2f}"
