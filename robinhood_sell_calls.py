@@ -7,14 +7,12 @@ import subprocess
 try:
     import yfinance
 except ImportError:
-    print("yfinance not found. Installing...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance"])
     import yfinance
 
 try:
     import lxml
 except ImportError:
-    print("lxml not found. Installing...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "lxml"])
     import lxml
 
@@ -36,7 +34,7 @@ NUM_EXPIRATIONS = 3
 NUM_CALLS = 2
 PRICE_ADJUST = 0.01
 RISK_FREE_RATE = 0.05
-MIN_PRICE = 0.10
+MIN_PRICE = 0.01
 HV_PERIOD = 21
 CANDLE_WIDTH = 0.6
 LOW_DAYS = 14
@@ -129,14 +127,9 @@ cutoff = today + timedelta(days=30)
 
 # ------------------ TEST MODE CONFIG ------------------
 if TEST_MODE:
-    owned_positions = [{'quantity': '100', 'instrument': 'fake_url'}]
-    r.stocks.get_instrument_by_url = lambda url: {'symbol': 'OPEN'}
     tickers_owned_100 = ['OPEN']
     safe_tickers = ['OPEN']
     MIN_PRICE = 0.01
-    risky_msgs = []
-    safe_count = 1
-    risky_count = 0
     summary_lines = ["✅ <b>Safe Tickers</b>\n<b>OPEN</b>", "\n📊 Summary: ✅ Safe: 1 | ⚠️ Risky: 0"]
     send_telegram_message("\n".join(summary_lines))
 else:
@@ -172,11 +165,10 @@ for TICKER in safe_tickers:
         df['volume'] = df['volume'].fillna(0)
 
         month_high = df['close'].max()
-        month_low = df['close'].min()
         last_30_high = df['high'][-LOW_DAYS:].max()
         distance_from_high = month_high - current_price
         distance_pct = distance_from_high / month_high
-        proximity = "🔺 Closer to 1M High" if abs(current_price - month_high) < abs(current_price - month_low) else "🔻 Closer to 1M Low"
+        proximity = "🔺 Closer to 1M High" if current_price >= month_high * 0.5 else "🔻 Far from 1M High"
 
         all_calls = r.options.find_tradable_options(TICKER, optionType="call")
         exp_dates = sorted(set([opt['expiration_date'] for opt in all_calls]))[:NUM_EXPIRATIONS]
@@ -190,7 +182,7 @@ for TICKER in safe_tickers:
             calls_for_exp = [opt for opt in all_calls if opt['expiration_date'] == exp_date]
 
             strikes_above = sorted([float(opt['strike_price']) for opt in calls_for_exp if float(opt['strike_price']) > current_price])
-            closest_strikes = strikes_above[:4]
+            closest_strikes = strikes_above[:4]  # <-- scan top 4 strikes
 
             for opt in calls_for_exp:
                 strike = float(opt['strike_price'])
@@ -222,14 +214,16 @@ for TICKER in safe_tickers:
                         "Distance From High %": distance_pct
                     })
 
-        selected_calls = sorted(candidate_calls, key=lambda x:x['Profit/Risk'], reverse=True)[:NUM_CALLS]
+        # ---------- Score-based selection ----------
+        for c in candidate_calls:
+            c['Score'] = c['Profit/Risk'] * c['Prob OTM']  # safer profitable strikes
+        selected_calls = sorted(candidate_calls, key=lambda x: x['Score'], reverse=True)[:NUM_CALLS]
         all_options.extend(selected_calls)
 
         selected_strikes = [c['Strike Price'] for c in selected_calls]
         msg_lines = [
             f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}",
-            f"💹 1M High: ${month_high:.2f}", f"📉 1M Low: ${month_low:.2f}",
-            f"📌 Proximity: {proximity}\n"
+            f"💹 1M High: ${month_high:.2f}", f"📌 Proximity: {proximity}\n"
         ]
         for opt in selected_calls:
             msg_lines.append(f"{risk_emoji(opt['Prob OTM'])} 📅 Exp: {opt['Expiration Date']}")
@@ -237,7 +231,7 @@ for TICKER in safe_tickers:
             msg_lines.append(f"💰 Price : ${opt['Option Price']:.2f}")
             msg_lines.append(f"🔺 Delta : {opt['Delta']:.3f}")
             msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%")
-            msg_lines.append(f"💎 Premium/Risk: {opt['Profit/Risk']:.2f}")
+            msg_lines.append(f"💎 Premium/Risk: {opt['Profit/Risk']:.2f} | Score: {opt['Score']:.2f}")
             msg_lines.append(f"📉 Dist. from 1M High: {opt['Distance From High %']*100:.1f}%\n")
 
         buf = plot_candlestick(df, current_price, last_30_high, selected_strikes)
@@ -248,7 +242,7 @@ for TICKER in safe_tickers:
 
 # ------------------ BEST OPTION ALERT ------------------
 if all_options:
-    best = max(all_options, key=lambda x: (x['Profit/Risk'], x['Distance From High %']))
+    best = max(all_options, key=lambda x: (x['Score'], x['Distance From High %']))
     premium_risk = best['Profit/Risk']
 
     msg_lines = [
@@ -259,7 +253,7 @@ if all_options:
         f"💰 Price     : ${best['Option Price']:.2f}",
         f"🔺 Delta     : {best['Delta']:.3f}",
         f"🎯 Prob OTM  : {best['Prob OTM']*100:.1f}%",
-        f"💎 Premium/Risk: {premium_risk:.2f}",
+        f"💎 Premium/Risk: {premium_risk:.2f} | Score: {best['Score']:.2f}",
         f"📉 Dist. from 1M High: {best['Distance From High %']*100:.1f}%"
     ]
 
