@@ -1,4 +1,4 @@
-# robinhood_sell_puts_full_safe_v4.py
+# robinhood_sell_puts_full_final.py
 
 import os, requests, io
 from datetime import datetime, timedelta
@@ -7,6 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import robin_stocks.robinhood as r
+import yfinance as yf
 
 # ------------------ CONFIG ------------------
 TICKERS = ["TLRY", "PLUG", "BITF", "BBAI", "SPCE", "ONDS", "GRAB", "LUMN",
@@ -86,30 +87,27 @@ risky_count = 0
 
 for ticker in TICKERS:
     try:
-        has_event = False
+        stock = yf.Ticker(ticker)
         msg_parts = [f"📊 <b>{ticker}</b>"]
+        has_event = False
 
-        # Dividend check
+        # Dividend
         try:
-            dividends = r.stocks.get_dividends(ticker)
-            for div in dividends:
-                for key in ['record_date','payable_date']:
-                    if key in div and div[key]:
-                        div_date = pd.to_datetime(div[key]).date()
-                        if today <= div_date <= cutoff:
-                            msg_parts.append(f"⚠️ 💰 Dividend on {div_date.strftime('%d-%m-%y')}")
-                            has_event = True
+            if not stock.dividends.empty:
+                div_date = stock.dividends.index[-1].date()
+                if today <= div_date <= cutoff:
+                    msg_parts.append(f"⚠️ 💰 Dividend on {div_date.strftime('%d-%m-%y')}")
+                    has_event = True
         except: pass
 
-        # Earnings check (robust)
+        # Earnings
         try:
-            earnings_info = r.stocks.get_earnings_dates(ticker, limit=5)
-            for ed in earnings_info:
-                if 'date' in ed and ed['date']:
-                    ed_date = pd.to_datetime(ed['date']).date()
-                    if today <= ed_date <= cutoff:
-                        msg_parts.append(f"⚠️ 📢 Earnings on {ed_date.strftime('%d-%m-%y')}")
-                        has_event = True
+            earnings_dates = stock.get_earnings_dates(limit=2)
+            if not earnings_dates.empty:
+                earnings_date = earnings_dates.index.min().date()
+                if today <= earnings_date <= cutoff:
+                    msg_parts.append(f"⚠️ 📢 Earnings on {earnings_date.strftime('%d-%m-%y')}")
+                    has_event = True
         except: pass
 
         if has_event:
@@ -118,11 +116,11 @@ for ticker in TICKERS:
         else:
             safe_tickers.append(ticker)
             safe_count += 1
+
     except Exception as e:
         risky_msgs.append(f"⚠️ <b>{ticker}</b> error: {e}")
         risky_count += 1
 
-# Send earnings/dividends summary
 summary_lines = []
 if risky_msgs:
     summary_lines.append("⚠️ <b>Risky Tickers</b>\n" + "\n".join(risky_msgs) + "\n")
@@ -182,20 +180,27 @@ for ticker in safe_tickers:
             if not market_data: continue
             md = market_data[0]
 
+            # Price
             try:
-                ask = float(md.get('ask_price') or 0.0)
-                last_trade = float(md.get('last_trade_price') or 0.0)
-                price = max(ask, last_trade)
+                price = float(md.get('ask_price') or md.get('last_trade_price') or 0.0)
                 if price < MIN_PRICE:
                     continue
             except: continue
 
+            # Prob OTM using Robinhood COP
+            try:
+                prob_OTM = float(md.get('chance_of_profit_long', 0)) / 100
+            except:
+                prob_OTM = 0.0
+
+            # Delta (optional, for display)
             try:
                 delta = float(md.get('delta') or 0.0)
-            except: delta = 0.0
+            except:
+                delta = 0.0
 
-            prob_OTM = 1 - abs(delta)
             premium_risk = price / max(current_price - strike, 0.01)
+
             candidate_puts.append({
                 "Ticker": ticker,
                 "Strike Price": strike,
@@ -231,8 +236,7 @@ for ticker in safe_tickers:
         send_telegram_message(f"⚠️ Error processing {ticker}: {e}")
 
 # ------------------ BEST OPTION ALERT ------------------
-valid_best = [opt for opt in all_options 
-              if opt['Option Price'] >= BEST_MIN_PRICE and opt['Prob OTM'] >= BEST_MIN_PROB]
+valid_best = [opt for opt in all_options if opt['Option Price'] >= BEST_MIN_PRICE and opt['Prob OTM'] >= BEST_MIN_PROB]
 if valid_best:
     best = max(valid_best, key=lambda x: x['Prob OTM'])
     exp_fmt = datetime.strptime(best['Expiration Date'], "%Y-%m-%d").strftime("%d-%m-%y")
