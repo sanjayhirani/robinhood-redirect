@@ -1,4 +1,4 @@
-# robinhood_sell_puts_with_risk_robust.py
+# robinhood_sell_puts_top3.py
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 import sys
@@ -7,14 +7,12 @@ import subprocess
 try:
     import yfinance
 except ImportError:
-    print("yfinance not found. Installing...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance"])
     import yfinance
 
 try:
     import lxml
 except ImportError:
-    print("lxml not found. Installing...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "lxml"])
     import lxml
 
@@ -34,15 +32,12 @@ import pandas as pd
 TICKERS = ["TLRY", "PLUG", "BITF", "BBAI", "SPCE", "ONDS", "GRAB", "LUMN",
            "RIG", "BB", "HTZ", "RXRX", "CLOV", "RZLV" ,"NVTS" ,"RR"]
 NUM_EXPIRATIONS = 3
-NUM_PUTS = 2
 PRICE_ADJUST = 0.01
 RISK_FREE_RATE = 0.05
 MIN_PRICE = 0.15
 HV_PERIOD = 21
 CANDLE_WIDTH = 0.6
 LOW_DAYS = 14
-MIN_PREMIUM_RISK = 0.1
-MIN_STRIKE_RATIO = 0.5  # skip strikes below 50% of current price
 
 # ------------------ SECRETS ------------------
 USERNAME = os.environ["RH_USERNAME"]
@@ -161,7 +156,6 @@ for ticker in TICKERS:
         risky_msgs.append(f"⚠️ <b>{ticker}</b> error")
         risky_count += 1
 
-# Send alert
 summary_lines = []
 if risky_msgs: summary_lines.append("⚠️ <b>Risky Tickers</b>\n" + "\n".join(risky_msgs) + "\n")
 else: summary_lines.append("⚠️ <b>No risky tickers found 🎉</b>\n")
@@ -198,62 +192,70 @@ for TICKER in safe_tickers:
         buf = plot_candlestick(df, current_price, last_14_low)
 
         all_puts = r.options.find_tradable_options(TICKER, optionType="put")
-        exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))[:NUM_EXPIRATIONS]
+        valid_puts = []
+        for opt in all_puts:
+            try: strike = float(opt['strike_price'])
+            except: continue
+            if strike >= current_price: continue
+            valid_puts.append((strike, opt))
+        valid_puts.sort(key=lambda x: x[0], reverse=True)
+        top_puts = valid_puts[:3]  # top 3 strikes under current price
+
         candidate_puts = []
         sigma = historical_volatility(df['close'].values, HV_PERIOD)
 
-        for exp_date in exp_dates:
-            exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
-            T = max((exp_date_obj - today).days / 365, 1/365)
-            puts_for_exp = [opt for opt in all_puts if opt['expiration_date'] == exp_date]
-
-            for opt in puts_for_exp:
-                try: strike = float(opt['strike_price'])
-                except: continue
-                if strike >= current_price or strike < MIN_STRIKE_RATIO * current_price: continue
-
-                option_id = opt['id']
-                market_data = r.options.get_option_market_data_by_id(option_id)
-                if not market_data or all(
-                    float(market_data[0].get(x) or 0.0) == 0.0 for x in ['last_trade_price','bid_price','ask_price']
-                ):
-                    continue
-
+        for strike, opt in top_puts:
+            option_id = opt['id']
+            market_data = r.options.get_option_market_data_by_id(option_id)
+            if not market_data: continue
+            try:
+                last = float(market_data[0].get('last_trade_price') or 0.0)
                 bid = float(market_data[0].get('bid_price') or 0.0)
                 ask = float(market_data[0].get('ask_price') or 0.0)
-                last = float(market_data[0].get('last_trade_price') or 0.0)
-                price = max(last if last>0 else (bid+ask)/2 - PRICE_ADJUST, 0.0)
+            except: continue
 
-                try: delta = float(market_data[0].get('delta')) if market_data[0].get('delta') else None
-                except: delta = None
-                if delta is None or delta==0.0:
-                    delta = black_scholes_put_delta(current_price, strike, T, RISK_FREE_RATE, sigma)
+            if last > 0:
+                price = last
+            elif bid > 0 and ask > 0:
+                price = (bid + ask)/2
+            else:
+                continue  # skip illiquid
 
-                premium_risk = price / max(current_price - strike, 0.01)
-                if price >= MIN_PRICE and premium_risk >= MIN_PREMIUM_RISK:
-                    prob_OTM = 1 - abs(delta)
-                    candidate_puts.append({
-                        "Ticker": TICKER, "Current Price": current_price,
-                        "Expiration Date": exp_date, "Strike Price": strike,
-                        "Option Price": price, "Delta": delta,
-                        "Prob OTM": prob_OTM, "Premium/Risk": premium_risk,
-                        "URL": rh_url
-                    })
+            delta = None
+            try: delta = float(market_data[0].get('delta'))
+            except: pass
+            if delta is None:
+                T = max((datetime.strptime(opt['expiration_date'], "%Y-%m-%d").date() - today).days/365, 1/365)
+                delta = black_scholes_put_delta(current_price, strike, T, RISK_FREE_RATE, sigma)
 
-        selected_puts = sorted(candidate_puts, key=lambda x:x['Prob OTM'], reverse=True)[:NUM_PUTS]
-        all_options.extend(selected_puts)
+            prob_OTM = 1 - abs(delta)
+            premium_risk = price / max(current_price - strike, 0.01)
+
+            candidate_puts.append({
+                "Ticker": TICKER,
+                "Strike Price": strike,
+                "Option Price": price,
+                "Delta": delta,
+                "Prob OTM": prob_OTM,
+                "Premium/Risk": premium_risk,
+                "Expiration Date": opt['expiration_date'],
+                "URL": rh_url
+            })
+
+        candidate_puts.sort(key=lambda x: x['Prob OTM'], reverse=True)
+        all_options.extend(candidate_puts)
 
         msg_lines = [f"📊 <a href='{rh_url}'>{TICKER}</a> current: £{current_price:.2f}",
                      f"💹 1M High: £{month_high:.2f}", f"📉 1M Low: £{month_low:.2f}",
                      f"📌 Proximity: {proximity}\n"]
-        for opt in selected_puts:
+        for opt in candidate_puts:
             msg_lines.append(f"{risk_emoji(opt['Prob OTM'])} 📅 Exp: {opt['Expiration Date']}")
             msg_lines.append(f"💲 Strike: {opt['Strike Price']}")
             msg_lines.append(f"💰 Price : £{opt['Option Price']:.2f}")
             msg_lines.append(f"🔺 Delta : {opt['Delta']:.3f}")
             msg_lines.append(f"🎯 Prob  : {opt['Prob OTM']*100:.1f}%")
             msg_lines.append(f"💎 Premium/Risk: {opt['Premium/Risk']:.2f}\n")
-        send_telegram_photo(buf, "\n".join(msg_lines))
+        if candidate_puts: send_telegram_photo(buf, "\n".join(msg_lines))
 
     except Exception as e:
         send_telegram_message(f"⚠️ Error processing {TICKER}: {e}")
@@ -262,7 +264,7 @@ for TICKER in safe_tickers:
 if all_options:
     best = max(all_options, key=lambda x:x['Prob OTM'])
     msg_lines = ["🔥 <b>Best Option to Sell</b>:",
-                 f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: £{best['Current Price']:.2f}",
+                 f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: £{best['Option Price']:.2f}",
                  f"✅ Expiration : {best['Expiration Date']}",
                  f"💲 Strike    : {best['Strike Price']}",
                  f"💰 Price     : £{best['Option Price']:.2f}",
@@ -285,5 +287,5 @@ if all_options:
     df['low'] = df['low'].fillna(df[['open','close']].min(axis=1))
     df['volume'] = df['volume'].fillna(0)
     last_14_low = df['low'][-LOW_DAYS:].min()
-    buf = plot_candlestick(df, best['Current Price'], last_14_low, best['Strike Price'], best['Expiration Date'])
+    buf = plot_candlestick(df, best['Option Price'], last_14_low, best['Strike Price'], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
