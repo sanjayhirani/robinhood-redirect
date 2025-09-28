@@ -121,6 +121,19 @@ r.login(USERNAME, PASSWORD)
 today = datetime.now().date()
 cutoff = today + timedelta(days=30)
 
+# ------------------ TEST MODE: MOCK OWNED POSITIONS ------------------
+# Comment out this section when running for real
+owned_positions = [{
+    'quantity': '100',
+    'instrument': 'https://api.robinhood.com/instruments/12345678-aaaa-bbbb-cccc-1234567890ab/'  # fake URL
+}]
+
+# Monkey-patch get_instrument_by_url to return symbol OPEN for testing
+original_get_instrument_by_url = r.stocks.get_instrument_by_url
+def mock_get_instrument_by_url(url):
+    return {'symbol': 'OPEN'}
+r.stocks.get_instrument_by_url = mock_get_instrument_by_url
+
 # ------------------ GET TICKERS YOU OWN 100 SHARES ------------------
 owned_positions = r.account.get_open_stock_positions()
 tickers_owned_100 = []
