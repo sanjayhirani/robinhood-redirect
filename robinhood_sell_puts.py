@@ -176,7 +176,11 @@ send_telegram_message("\n".join(summary_lines))
 
 # ------------------ PART 2: ROBINHOOD OPTIONS ------------------
 all_options = []
-candidate_scores = []  # store scores for later message
+candidate_scores = []
+
+# Get buying power
+account_data = r.profiles.load_account_profile()
+buying_power = float(account_data['cash_available_for_withdrawal'])
 
 for TICKER in safe_tickers:
     try:
@@ -247,25 +251,27 @@ for TICKER in safe_tickers:
         selected_puts = sorted(candidate_puts, key=lambda x: x['COP Short'], reverse=True)[:NUM_PUTS]
         all_options.extend(selected_puts)
 
-        # Send ticker alert with each put in a "box"
+        # Send individual ticker alert with line separators
         msg_lines = [f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}"]
-        for p in selected_puts:
+        for idx, p in enumerate(selected_puts, start=1):
+            # max contracts for candidate score
+            max_contracts = max(1, int(buying_power // (p['Strike Price'] * 100)))
+            total_premium = p['Bid Price'] * 100 * max_contracts
+
             msg_lines.append(
-                "<pre>"
-                f"Exp: {p['Expiration Date']}\n"
-                f"Strike: ${p['Strike Price']}\n"
-                f"Bid: ${p['Bid Price']:.2f}\n"
+                f"<b>Option {idx}:</b>\n"
+                f"Exp: {p['Expiration Date']} | Strike: ${p['Strike Price']} | Bid: ${p['Bid Price']:.2f}\n"
                 f"Delta: {p['Delta']:.3f} | IV: {p['IV']*100:.2f}% | COP: {p['COP Short']*100:.2f}%\n"
-                f"Theta: {p['Theta']:.2f} | OI: {p['Open Interest']} | Vol: {p['Volume']}"
-                "</pre>"
+                f"Theta: {p['Theta']:.2f} | OI: {p['Open Interest']} | Vol: {p['Volume']}\n"
+                "────────────────────────────"
             )
-            # Prepare score for later message
+
+            # store candidate score info
             days_to_exp = (pd.to_datetime(p['Expiration Date']).date() - today).days
-            base_score = (p['Bid Price']*100*p['COP Short'])/days_to_exp
             iv_hv_ratio = p['IV']/p['HV'] if p['HV']>0 else 1.0
             liquidity_weight = 1 + 0.5*(p['Volume']+p['Open Interest'])/1000
-            enhanced_score = base_score*iv_hv_ratio*liquidity_weight
-            candidate_scores.append((p['Ticker'], p['Strike Price'], p['Expiration Date'], enhanced_score))
+            enhanced_score = total_premium * iv_hv_ratio * liquidity_weight / (days_to_exp**1.0)
+            candidate_scores.append((p['Ticker'], p['Strike Price'], p['Expiration Date'], max_contracts, total_premium, enhanced_score))
 
         if selected_puts:
             buf = plot_candlestick(df, current_price, last_14_low, [p['Strike Price'] for p in selected_puts])
@@ -274,28 +280,32 @@ for TICKER in safe_tickers:
     except Exception as e:
         send_telegram_message(f"⚠️ Error processing {TICKER}: {e}")
 
-# ------------------ SEND SCORES MESSAGE ------------------
+# ------------------ SEND CANDIDATE SCORES MESSAGE ------------------
 if candidate_scores:
-    candidate_scores.sort(key=lambda x: x[3], reverse=True)
-    score_msg = "<b>📊 Candidate Put Scores</b>\n"
-    for t, strike, exp, score in candidate_scores:
-        score_msg += f"{t} | Strike: ${strike} | Exp: {exp} | Score: {score:.2f}\n"
+    candidate_scores.sort(key=lambda x: x[5], reverse=True)  # sort by enhanced score
+    score_msg = "<b>📊 Candidate Put Scores (Max Contracts & Premium)</b>\n"
+    for t, strike, exp, max_ct, prem, score in candidate_scores:
+        score_msg += f"{t} | Strike: ${strike} | Exp: {exp} | Max Contracts: {max_ct} | Total Premium: ${prem:.2f} | Score: {score:.2f}\n"
     send_telegram_message(score_msg)
 
 # ------------------ BEST OPTION ALERT ------------------
-def score_put(opt):
+def adjusted_score(opt):
     days_to_exp = (pd.to_datetime(opt['Expiration Date']).date() - today).days
     if days_to_exp <= 0:
         return 0
     iv_hv_ratio = opt['IV']/opt['HV'] if opt['HV']>0 else 1.0
     liquidity_weight = 1 + 0.5*(opt['Volume']+opt['Open Interest'])/1000
-    base_score = (opt['Bid Price']*100*opt['COP Short'])/days_to_exp
-    return base_score*iv_hv_ratio*liquidity_weight
+    max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
+    total_premium = opt['Bid Price'] * 100 * max_contracts * opt['COP Short']
+    return total_premium * iv_hv_ratio * liquidity_weight / (days_to_exp**1.0)
 
 if all_options:
-    best = max(all_options, key=score_put)
+    best = max(all_options, key=adjusted_score)
+    max_contracts = max(1, int(buying_power // (best['Strike Price'] * 100)))
+    total_premium = best['Bid Price'] * 100 * max_contracts
+
     msg_lines = [
-        "🔥 <b>Best Cash-Secured Put</b>:",
+        "🔥 <b>Best Cash-Secured Put (Max Premium)</b>:",
         f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Current Price']:.2f}",
         f"✅ Expiration : {best['Expiration Date']}",
         f"💲 Strike    : {best['Strike Price']}",
@@ -303,7 +313,8 @@ if all_options:
         f"🔺 Delta     : {best['Delta']:.3f}",
         f"📈 IV       : {best['IV']*100:.2f}%",
         f"🎯 COP Short : {best['COP Short']*100:.1f}%",
-        f"📝 Score    : {score_put(best):.2f}"
+        f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
+        f"📝 Adjusted Score: {adjusted_score(best):.2f}"
     ]
 
     historicals = r.stocks.get_stock_historicals(best['Ticker'], interval='day', span='month', bounds='regular')
