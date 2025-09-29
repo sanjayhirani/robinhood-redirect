@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 # ------------------ CONFIG ------------------
-TICKERS = ["SNAP", "ACHR", "OPEN", "BBAI", "PTON", "ONDS", "GRAB", "LAC", "HTZ", "RZLV", "NVTS"]
+TICKERS = ["SNAP", "ACHR", "OPEN", "BBAI", "PTON", "ONDS", "GRAB", "LAC", "HTZ", "RZLV", "NVTS", "CLOV", "RIG, "LDI", "SPCE", "AMC", "LAZR"]
 NUM_EXPIRATIONS = 3
 NUM_PUTS = 3
 MIN_PRICE = 0.10
