@@ -1,7 +1,7 @@
 name: Robinhood Sell Puts Scanner
 
 on:
-  workflow_dispatch:   # <-- allows manual runs
+  workflow_dispatch:
   schedule:
     - cron: '30 15 * * 1'  # every Monday at 11:30 AM ET
 
@@ -16,11 +16,18 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install robin_stocks pandas matplotlib numpy scipy requests lxml
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/robinhood_sell_puts.py') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
+      - name: Install dependencies (quiet)
+        run: |
+          python -m pip install --upgrade pip > /dev/null 2>&1
+          pip install --upgrade robin_stocks pandas matplotlib numpy scipy requests lxml yfinance > /dev/null 2>&1 || pip install --upgrade robin_stocks pandas matplotlib numpy scipy requests lxml yfinance
 
       - name: Run Robinhood Sell Puts Scanner
         env:
