@@ -1,22 +1,15 @@
-# robinhood_sell_puts_main_updated.py
+# robinhood_sell_puts_random_tickers.py
 
 # ------------------ AUTO-INSTALL DEPENDENCIES (optional) ------------------
 import sys
 import subprocess
 
-try:
-    import yfinance
-except ImportError:
-    print("yfinance not found. Installing...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance"])
-    import yfinance
-
-try:
-    import lxml
-except ImportError:
-    print("lxml not found. Installing...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "lxml"])
-    import lxml
+for pkg in ["yfinance", "lxml", "robin_stocks", "pandas", "numpy", "matplotlib", "requests"]:
+    try:
+        __import__(pkg)
+    except ImportError:
+        print(f"{pkg} not found. Installing...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
 
 # ------------------ OTHER IMPORTS ------------------
 import os
@@ -28,9 +21,10 @@ import matplotlib.dates as mdates
 import io
 import numpy as np
 import pandas as pd
+import yfinance as yf
+import random
 
 # ------------------ CONFIG ------------------
-TICKERS = ["SNAP", "ACHR", "OPEN", "BBAI", "PTON", "ONDS", "GRAB", "LAC", "HTZ", "RZLV", "NVTS"]
 NUM_EXPIRATIONS = 3
 NUM_PUTS = 3                # choose top 3 puts for alerts
 PRICE_ADJUST = 0.01
@@ -39,7 +33,8 @@ MIN_PRICE = 0.10
 HV_PERIOD = 21
 CANDLE_WIDTH = 0.6
 LOW_DAYS = 14
-EXPIRY_LIMIT_DAYS = 21      # NEW: limit to expirations within 21 days
+EXPIRY_LIMIT_DAYS = 21      # limit to expirations within 21 days
+NUM_TICKERS = 20            # number of random tickers
 
 # ------------------ SECRETS ------------------
 USERNAME = os.environ["RH_USERNAME"]
@@ -115,6 +110,40 @@ r.login(USERNAME, PASSWORD)
 today = datetime.now().date()
 cutoff = today + timedelta(days=EXPIRY_LIMIT_DAYS)
 
+# ------------------ RANDOM TICKER SELECTION ------------------
+print("Fetching random tickers...")
+nasdaq_url = "https://old.nasdaq.com/screening/companies-by-name.aspx?exchange=NASDAQ&render=download"
+nasdaq_df = pd.read_csv(nasdaq_url)
+nasdaq_df['LastSale'] = pd.to_numeric(nasdaq_df['LastSale'].str.replace('$','', regex=False), errors='coerce')
+nasdaq_df['MarketCap'] = pd.to_numeric(
+    nasdaq_df['MarketCap'].str.replace('$','', regex=False)
+                       .str.replace('B','e9').str.replace('M','e6').str.replace('K','e3'),
+    errors='coerce'
+)
+
+price_filtered = nasdaq_df[(nasdaq_df['LastSale'] >= 1) & (nasdaq_df['LastSale'] <= 10)]
+liquid_tickers = price_filtered[price_filtered['MarketCap'] >= 50e6]
+
+candidate_tickers = liquid_tickers['Symbol'].tolist()
+random.shuffle(candidate_tickers)
+
+TICKERS = []
+for ticker in candidate_tickers:
+    try:
+        options = r.options.find_tradable_options(ticker, optionType="put")
+        has_good_bid = any(
+            float(r.options.get_option_market_data_by_id(opt['id'])[0].get('bid_price') or 0.0) >= MIN_PRICE
+            for opt in options
+        )
+        if has_good_bid:
+            TICKERS.append(ticker)
+        if len(TICKERS) >= NUM_TICKERS:
+            break
+    except:
+        continue
+
+print("Selected tickers:", TICKERS)
+
 # ------------------ PART 1: EARNINGS/DIVIDENDS RISK CHECK ------------------
 safe_tickers = []
 risky_msgs = []
@@ -123,7 +152,7 @@ risky_count = 0
 
 for ticker in TICKERS:
     try:
-        stock = yfinance.Ticker(ticker)
+        stock = yf.Ticker(ticker)
         msg_parts = [f"📊 <b>{ticker}</b>"]
         has_event = False
 
@@ -134,8 +163,8 @@ for ticker in TICKERS:
                 if today <= div_date <= cutoff:
                     msg_parts.append(f"⚠️ 💰 Dividend on {div_date.strftime('%d-%m-%y')}")
                     has_event = True
-        except Exception as e:
-            msg_parts.append(f"⚠️ Dividend check error: {e}")
+        except:
+            pass
 
         # Earnings
         try:
@@ -145,8 +174,8 @@ for ticker in TICKERS:
                 if today <= earnings_date <= cutoff:
                     msg_parts.append(f"⚠️ 📢 Earnings on {earnings_date.strftime('%d-%m-%y')}")
                     has_event = True
-        except Exception as e:
-            msg_parts.append(f"⚠️ Earnings check error: {e}")
+        except:
+            pass
 
         if has_event:
             risky_msgs.append(" | ".join(msg_parts))
