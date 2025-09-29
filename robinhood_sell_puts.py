@@ -59,7 +59,7 @@ def send_telegram_message(msg):
         data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     )
 
-def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_date=None, show_strikes=True):
+def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_date=None, show_strikes=True, annotations=None):
     fig, ax = plt.subplots(figsize=(12,6))
     fig.patch.set_facecolor('black')
     ax.set_facecolor('black')
@@ -85,6 +85,11 @@ def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_
         exp_date_obj = pd.to_datetime(exp_date).tz_localize(None)
         if df.index.min() <= exp_date_obj <= df.index.max():
             ax.axvline(mdates.date2num(exp_date_obj), color='orange', linestyle='--', linewidth=2, label=f'Expiration: {exp_date_obj.strftime("%d-%m-%y")}')
+
+    # Add annotations if provided
+    if annotations:
+        for text, y in annotations:
+            ax.text(df.index[-1], y, text, color='cyan', fontsize=12, ha='right', va='bottom', weight='bold')
 
     ax.set_ylabel('Price ($)', color='white')
     ax.tick_params(colors='white')
@@ -251,58 +256,76 @@ for TICKER in safe_tickers:
         selected_puts = sorted(candidate_puts, key=lambda x: x['COP Short'], reverse=True)[:NUM_PUTS]
         all_options.extend(selected_puts)
 
-        # Send individual ticker alert with line separators
-        msg_lines = [f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}"]
-        for idx, p in enumerate(selected_puts, start=1):
-            # max contracts for candidate score
+        # store candidate score info
+        for p in selected_puts:
             max_contracts = max(1, int(buying_power // (p['Strike Price'] * 100)))
             total_premium = p['Bid Price'] * 100 * max_contracts
-
-            msg_lines.append(
-                f"<b>Option {idx}:</b>\n"
-                f"Exp: {p['Expiration Date']} | Strike: ${p['Strike Price']} | Bid: ${p['Bid Price']:.2f}\n"
-                f"Delta: {p['Delta']:.3f} | IV: {p['IV']*100:.2f}% | COP: {p['COP Short']*100:.2f}%\n"
-                f"Theta: {p['Theta']:.2f} | OI: {p['Open Interest']} | Vol: {p['Volume']}\n"
-                "────────────────────────────"
-            )
-
-            # store candidate score info
             days_to_exp = (pd.to_datetime(p['Expiration Date']).date() - today).days
             iv_hv_ratio = p['IV']/p['HV'] if p['HV']>0 else 1.0
             liquidity_weight = 1 + 0.5*(p['Volume']+p['Open Interest'])/1000
             enhanced_score = total_premium * iv_hv_ratio * liquidity_weight / (days_to_exp**1.0)
             candidate_scores.append((p['Ticker'], p['Strike Price'], p['Expiration Date'], max_contracts, total_premium, enhanced_score))
 
-        if selected_puts:
-            buf = plot_candlestick(df, current_price, last_14_low, [p['Strike Price'] for p in selected_puts])
-            send_telegram_photo(buf, "\n".join(msg_lines))
-
     except Exception as e:
         send_telegram_message(f"⚠️ Error processing {TICKER}: {e}")
 
-# ------------------ SEND CANDIDATE SCORES MESSAGE ------------------
-if candidate_scores:
-    candidate_scores.sort(key=lambda x: x[5], reverse=True)  # sort by enhanced score
-    score_msg = "<b>📊 Candidate Put Scores (Max Contracts & Premium)</b>\n"
-    for t, strike, exp, max_ct, prem, score in candidate_scores:
-        score_msg += f"{t} | Strike: ${strike} | Exp: {exp} | Max Contracts: {max_ct} | Total Premium: ${prem:.2f} | Score: {score:.2f}\n"
-    send_telegram_message(score_msg)
+# ------------------ SEND INDIVIDUAL ALERTS (TOP 5 TICKERS ONLY) ------------------
+top_per_ticker = {}
+for t, strike, exp, max_ct, prem, score in candidate_scores:
+    if t not in top_per_ticker or score > top_per_ticker[t][5]:
+        top_per_ticker[t] = (t, strike, exp, max_ct, prem, score)
+
+sorted_tickers_by_score = sorted(top_per_ticker.values(), key=lambda x: x[5], reverse=True)
+top_5_tickers = [t[0] for t in sorted_tickers_by_score[:5]]
+
+for TICKER in top_5_tickers:
+    selected_puts = [p for p in all_options if p['Ticker'] == TICKER]
+    if not selected_puts:
+        continue
+
+    current_price = selected_puts[0]['Current Price']
+
+    historicals = r.stocks.get_stock_historicals(TICKER, interval='day', span='month', bounds='regular')
+    df = pd.DataFrame(historicals)
+    df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
+    df.set_index('begins_at', inplace=True)
+    df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
+    df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
+    df = prepare_historicals(df)
+    last_14_low = df['low'][-LOW_DAYS:].min()
+
+    msg_lines = [f"📊 <b>{TICKER}</b> current: ${current_price:.2f}"]
+    for p in selected_puts:
+        msg_lines.append(
+            "<pre>"
+            f"📅 Exp: {p['Expiration Date']} | 💲 Strike: ${p['Strike Price']} | 💰 Bid: ${p['Bid Price']:.2f} | "
+            f"🔺 Delta: {p['Delta']:.3f} | 📈 IV: {p['IV']*100:.2f}% | 🎯 COP: {p['COP Short']*100:.2f}%"
+            "</pre>"
+        )
+
+    buf = plot_candlestick(df, current_price, last_14_low, [p['Strike Price'] for p in selected_puts])
+    send_telegram_photo(buf, "\n".join(msg_lines))
+
+# ------------------ SEND CANDIDATE SCORES (ALL TICKERS) ------------------
+score_lines = ["📊 <b>Candidate Scores</b> (all tickers)"]
+for t, strike, exp, max_ct, prem, score in sorted(candidate_scores, key=lambda x: x[5], reverse=True):
+    score_lines.append(f"{t} | Exp: {exp} | Strike: ${strike} | Max Contracts: {max_ct} | Premium: ${prem:.2f} | Score: {score:.2f}")
+
+send_telegram_message("\n".join(score_lines))
 
 # ------------------ BEST OPTION ALERT ------------------
-def adjusted_score(opt):
+def adjusted_score(opt, alpha=1.0):
     days_to_exp = (pd.to_datetime(opt['Expiration Date']).date() - today).days
     if days_to_exp <= 0:
         return 0
-    iv_hv_ratio = opt['IV']/opt['HV'] if opt['HV']>0 else 1.0
-    liquidity_weight = 1 + 0.5*(opt['Volume']+opt['Open Interest'])/1000
-    max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
-    total_premium = opt['Bid Price'] * 100 * max_contracts * opt['COP Short']
-    return total_premium * iv_hv_ratio * liquidity_weight / (days_to_exp**1.0)
+    max_contracts = max(1, int(buying_power // (opt['Strike Price']*100)))
+    total_premium = opt['Bid Price']*100*max_contracts
+    return total_premium / (days_to_exp**alpha)
 
 if all_options:
     best = max(all_options, key=adjusted_score)
-    max_contracts = max(1, int(buying_power // (best['Strike Price'] * 100)))
-    total_premium = best['Bid Price'] * 100 * max_contracts
+    max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
+    total_premium = best['Bid Price']*100*max_contracts
 
     msg_lines = [
         "🔥 <b>Best Cash-Secured Put (Max Premium)</b>:",
@@ -317,14 +340,19 @@ if all_options:
         f"📝 Adjusted Score: {adjusted_score(best):.2f}"
     ]
 
-    historicals = r.stocks.get_stock_historicals(best['Ticker'], interval='day', span='month', bounds='regular')
-    df = pd.DataFrame(historicals)
+    df = pd.DataFrame(r.stocks.get_stock_historicals(best['Ticker'], interval='day', span='month', bounds='regular'))
     df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
     df.set_index('begins_at', inplace=True)
     df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
     df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
     df = prepare_historicals(df)
     last_14_low = df['low'][-LOW_DAYS:].min()
-    buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
-    send_telegram_photo(buf, "\n".join(msg_lines))
 
+    # Annotate max contracts and total premium
+    annotations = [
+        (f"Max Contracts: {max_contracts}", best['Strike Price']*1.002),
+        (f"Total Premium: ${total_premium:.2f}", best['Strike Price']*1.005)
+    ]
+
+    buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'], annotations=annotations)
+    send_telegram_photo(buf, "\n".join(msg_lines))
