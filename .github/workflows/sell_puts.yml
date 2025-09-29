@@ -37,4 +37,4 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-        run: python robinhood_finnhub_prefsample.py
+        run: python robinhood_sell_puts.py
