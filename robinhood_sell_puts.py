@@ -1,5 +1,3 @@
-# robinhood_sell_puts_main_optimized.py
-
 # ------------------ AUTO-INSTALL DEPENDENCIES (optional) ------------------
 import sys
 import subprocess
@@ -33,6 +31,8 @@ import pandas as pd
 TICKERS = ["SNAP", "ACHR", "OPEN", "BBAI", "PTON", "ONDS", "GRAB", "LAC", "HTZ", "RZLV", "NVTS", "CLOV", "RIG", "LDI", "SPCE", "AMC", "LAZR"]
 NUM_EXPIRATIONS = 3
 NUM_PUTS = 3
+PRICE_ADJUST = 0.01
+RISK_FREE_RATE = 0.05
 MIN_PRICE = 0.10
 HV_PERIOD = 21
 CANDLE_WIDTH = 0.6
@@ -59,7 +59,7 @@ def send_telegram_message(msg):
         data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     )
 
-def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_date=None, show_strikes=True, annotations=None):
+def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_date=None, annotations=None, show_strikes=True):
     fig, ax = plt.subplots(figsize=(12,6))
     fig.patch.set_facecolor('black')
     ax.set_facecolor('black')
@@ -86,10 +86,9 @@ def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_
         if df.index.min() <= exp_date_obj <= df.index.max():
             ax.axvline(mdates.date2num(exp_date_obj), color='orange', linestyle='--', linewidth=2, label=f'Expiration: {exp_date_obj.strftime("%d-%m-%y")}')
 
-    # Add annotations if provided
     if annotations:
-        for text, y in annotations:
-            ax.text(df.index[-1], y, text, color='cyan', fontsize=12, ha='right', va='bottom', weight='bold')
+        for text, price in annotations:
+            ax.text(df.index[-1], price, text, color='white', fontsize=10, verticalalignment='bottom')
 
     ax.set_ylabel('Price ($)', color='white')
     ax.tick_params(colors='white')
@@ -121,7 +120,7 @@ r.login(USERNAME, PASSWORD)
 today = datetime.now().date()
 cutoff = today + timedelta(days=EXPIRY_LIMIT_DAYS)
 
-# ------------------ PART 1: EARNINGS/DIVIDENDS RISK CHECK ------------------
+# ------------------ SCAN TICKERS ------------------
 safe_tickers = []
 risky_msgs = []
 safe_count = 0
@@ -132,7 +131,7 @@ for ticker in TICKERS:
         stock = yfinance.Ticker(ticker)
         msg_parts = [f"📊 <b>{ticker}</b>"]
         has_event = False
-
+        # Dividends
         try:
             future_divs = stock.dividends[stock.dividends.index.date >= today]
             if not future_divs.empty:
@@ -140,9 +139,9 @@ for ticker in TICKERS:
                 if div_date <= cutoff:
                     msg_parts.append(f"⚠️ 💰 Dividend on {div_date.strftime('%d-%m-%y')}")
                     has_event = True
-        except Exception as e:
-            msg_parts.append(f"⚠️ Dividend check error: {e}")
-
+        except:
+            pass
+        # Earnings
         try:
             earnings_dates = stock.get_earnings_dates(limit=2)
             if not earnings_dates.empty:
@@ -150,8 +149,8 @@ for ticker in TICKERS:
                 if today <= earnings_date <= cutoff:
                     msg_parts.append(f"⚠️ 📢 Earnings on {earnings_date.strftime('%d-%m-%y')}")
                     has_event = True
-        except Exception as e:
-            msg_parts.append(f"⚠️ Earnings check error: {e}")
+        except:
+            pass
 
         if has_event:
             risky_msgs.append(" | ".join(msg_parts))
@@ -159,7 +158,6 @@ for ticker in TICKERS:
         else:
             safe_tickers.append(ticker)
             safe_count += 1
-
     except Exception as e:
         risky_msgs.append(f"⚠️ <b>{ticker}</b> error: {e}")
         risky_count += 1
@@ -179,14 +177,8 @@ if safe_rows:
 summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
 send_telegram_message("\n".join(summary_lines))
 
-# ------------------ PART 2: ROBINHOOD OPTIONS ------------------
+# ------------------ GET ALL OPTIONS ------------------
 all_options = []
-candidate_scores = []
-
-# Get buying power
-account_data = r.profiles.load_account_profile()
-buying_power = float(account_data['cash_available_for_withdrawal'])
-
 for TICKER in safe_tickers:
     try:
         current_price = float(r.stocks.get_latest_price(TICKER)[0])
@@ -201,40 +193,29 @@ for TICKER in safe_tickers:
         df = prepare_historicals(df)
         last_14_low = df['low'][-LOW_DAYS:].min()
 
-        df['returns'] = np.log(df['close'] / df['close'].shift(1))
-        hv = df['returns'].rolling(HV_PERIOD).std().iloc[-1] * np.sqrt(252)
-
         all_puts = r.options.find_tradable_options(TICKER, optionType="put")
         exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))
         exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff]
         exp_dates = exp_dates[:NUM_EXPIRATIONS]
 
         candidate_puts = []
-
         for exp_date in exp_dates:
             puts_for_exp = [opt for opt in all_puts if opt['expiration_date'] == exp_date]
             strikes_below = sorted([float(opt['strike_price']) for opt in puts_for_exp if float(opt['strike_price']) < current_price], reverse=True)
-            chosen_strikes = strikes_below[2:2+NUM_PUTS]
-
+            chosen_strikes = strikes_below[2:5]  # skip 2 closest below
             for opt in puts_for_exp:
                 strike = float(opt['strike_price'])
                 if strike not in chosen_strikes:
                     continue
-
-                md = r.options.get_option_market_data_by_id(opt['id'])[0]
-
+                option_id = opt['id']
+                market_data = r.options.get_option_market_data_by_id(option_id)
+                if not market_data:
+                    continue
+                md = market_data[0]
                 bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
                 delta = float(md.get('delta') or 0.0)
                 iv = float(md.get('implied_volatility') or 0.0)
                 cop_short = float(md.get('chance_of_profit_short') or 0.0)
-                theta = float(md.get('theta') or 0.0)
-                open_interest = int(md.get('open_interest') or 0)
-                volume = int(md.get('volume') or 0)
-
-                dist_from_low = (strike - last_14_low)/last_14_low
-                if dist_from_low < 0.03:
-                    continue
-
                 if bid_price >= MIN_PRICE:
                     candidate_puts.append({
                         "Ticker": TICKER,
@@ -245,36 +226,28 @@ for TICKER in safe_tickers:
                         "Delta": delta,
                         "IV": iv,
                         "COP Short": cop_short,
-                        "Theta": theta,
-                        "Open Interest": open_interest,
-                        "Volume": volume,
-                        "Dist from Low": dist_from_low,
-                        "URL": rh_url,
-                        "HV": hv
+                        "URL": rh_url
                     })
-
         selected_puts = sorted(candidate_puts, key=lambda x: x['COP Short'], reverse=True)[:NUM_PUTS]
         all_options.extend(selected_puts)
+    except:
+        continue
 
-        # store candidate score info
-        for p in selected_puts:
-            max_contracts = max(1, int(buying_power // (p['Strike Price'] * 100)))
-            total_premium = p['Bid Price'] * 100 * max_contracts
-            days_to_exp = (pd.to_datetime(p['Expiration Date']).date() - today).days
-            iv_hv_ratio = p['IV']/p['HV'] if p['HV']>0 else 1.0
-            liquidity_weight = 1 + 0.5*(p['Volume']+p['Open Interest'])/1000
-            enhanced_score = total_premium * iv_hv_ratio * liquidity_weight / (days_to_exp**1.0)
-            candidate_scores.append((p['Ticker'], p['Strike Price'], p['Expiration Date'], max_contracts, total_premium, enhanced_score))
+# ------------------ CALCULATE SCORES ------------------
+candidate_scores = []
+buying_power = float(r.profiles.load_account_profile(info='buying_power'))
+for opt in all_options:
+    days_to_exp = (pd.to_datetime(opt['Expiration Date']).date() - today).days
+    max_contracts = max(1, int(buying_power // (opt['Strike Price']*100)))
+    total_premium = opt['Bid Price']*100*max_contracts
+    score = total_premium / (days_to_exp or 1)
+    candidate_scores.append((opt['Ticker'], opt['Strike Price'], opt['Expiration Date'], max_contracts, total_premium, score))
 
-    except Exception as e:
-        send_telegram_message(f"⚠️ Error processing {TICKER}: {e}")
-
-# ------------------ SEND INDIVIDUAL ALERTS (TOP 5 TICKERS ONLY) ------------------
+# ------------------ SEND TOP 5 INDIVIDUAL ALERTS ------------------
 top_per_ticker = {}
 for t, strike, exp, max_ct, prem, score in candidate_scores:
     if t not in top_per_ticker or score > top_per_ticker[t][5]:
         top_per_ticker[t] = (t, strike, exp, max_ct, prem, score)
-
 sorted_tickers_by_score = sorted(top_per_ticker.values(), key=lambda x: x[5], reverse=True)
 top_5_tickers = [t[0] for t in sorted_tickers_by_score[:5]]
 
@@ -282,48 +255,41 @@ for TICKER in top_5_tickers:
     selected_puts = [p for p in all_options if p['Ticker'] == TICKER]
     if not selected_puts:
         continue
-
     current_price = selected_puts[0]['Current Price']
-
     historicals = r.stocks.get_stock_historicals(TICKER, interval='day', span='month', bounds='regular')
     df = pd.DataFrame(historicals)
     df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
     df.set_index('begins_at', inplace=True)
     df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
-    df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
+    df.rename(columns={'open':'open','close':'close','high':'high','low':'low'}, inplace=True)
     df = prepare_historicals(df)
     last_14_low = df['low'][-LOW_DAYS:].min()
 
     msg_lines = [f"📊 <b>{TICKER}</b> current: ${current_price:.2f}"]
     for p in selected_puts:
         msg_lines.append(
-            "<pre>"
-            f"📅 Exp: {p['Expiration Date']} | 💲 Strike: ${p['Strike Price']} | 💰 Bid: ${p['Bid Price']:.2f} | "
-            f"🔺 Delta: {p['Delta']:.3f} | 📈 IV: {p['IV']*100:.2f}% | 🎯 COP: {p['COP Short']*100:.2f}%"
-            "</pre>"
+            f"▪️ 📅 Exp: {p['Expiration Date']} | 💲 Strike: ${p['Strike Price']} | 💰 Bid: ${p['Bid Price']:.2f}\n"
+            f"   🔺 Delta: {p['Delta']:.3f} | 📈 IV: {p['IV']*100:.2f}% | 🎯 COP: {p['COP Short']*100:.2f}%"
         )
 
     buf = plot_candlestick(df, current_price, last_14_low, [p['Strike Price'] for p in selected_puts])
     send_telegram_photo(buf, "\n".join(msg_lines))
 
-# ------------------ SEND CANDIDATE SCORES (ALL TICKERS) ------------------
+# ------------------ SEND CANDIDATE SCORES ------------------
 score_lines = ["📊 <b>Candidate Scores</b> (all tickers)"]
 for t, strike, exp, max_ct, prem, score in sorted(candidate_scores, key=lambda x: x[5], reverse=True):
-    score_lines.append(f"{t} | Exp: {exp} | Strike: ${strike} | Max Contracts: {max_ct} | Premium: ${prem:.2f} | Score: {score:.2f}")
+    score_lines.append(f"▪️ <b>{t}</b>\n"
+                       f"   📅 Exp: {exp}\n"
+                       f"   💲 Strike: ${strike}\n"
+                       f"   📝 Max Contracts: {max_ct}\n"
+                       f"   💰 Premium: ${prem:.2f}\n"
+                       f"   ⭐ Score: {score:.2f}")
 
 send_telegram_message("\n".join(score_lines))
 
-# ------------------ BEST OPTION ALERT ------------------
-def adjusted_score(opt, alpha=1.0):
-    days_to_exp = (pd.to_datetime(opt['Expiration Date']).date() - today).days
-    if days_to_exp <= 0:
-        return 0
-    max_contracts = max(1, int(buying_power // (opt['Strike Price']*100)))
-    total_premium = opt['Bid Price']*100*max_contracts
-    return total_premium / (days_to_exp**alpha)
-
+# ------------------ SEND BEST OPTION ALERT ------------------
 if all_options:
-    best = max(all_options, key=adjusted_score)
+    best = max(all_options, key=lambda o: (o['Bid Price']*100*max(1,int(buying_power//(o['Strike Price']*100))) / max((pd.to_datetime(o['Expiration Date']).date()-today).days,1)))
     max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
     total_premium = best['Bid Price']*100*max_contracts
 
@@ -336,19 +302,17 @@ if all_options:
         f"🔺 Delta     : {best['Delta']:.3f}",
         f"📈 IV       : {best['IV']*100:.2f}%",
         f"🎯 COP Short : {best['COP Short']*100:.1f}%",
-        f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
-        f"📝 Adjusted Score: {adjusted_score(best):.2f}"
+        f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}"
     ]
 
     df = pd.DataFrame(r.stocks.get_stock_historicals(best['Ticker'], interval='day', span='month', bounds='regular'))
     df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
     df.set_index('begins_at', inplace=True)
     df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
-    df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
+    df.rename(columns={'open':'open','close':'close','high':'high','low':'low'}, inplace=True)
     df = prepare_historicals(df)
     last_14_low = df['low'][-LOW_DAYS:].min()
 
-    # Annotate max contracts and total premium
     annotations = [
         (f"Max Contracts: {max_contracts}", best['Strike Price']*1.002),
         (f"Total Premium: ${total_premium:.2f}", best['Strike Price']*1.005)
