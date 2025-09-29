@@ -19,7 +19,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install robin_stocks pandas matplotlib numpy aiohttp yfinance lxml
+          pip install robin_stocks pandas matplotlib numpy aiohttp yfinance lxml requests
 
       - name: Run Robinhood Sell Puts Scanner
         env:
