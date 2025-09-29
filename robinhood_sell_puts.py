@@ -26,8 +26,6 @@ from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import io
-from math import log, sqrt
-from scipy.stats import norm
 import numpy as np
 import pandas as pd
 
@@ -117,7 +115,7 @@ r.login(USERNAME, PASSWORD)
 today = datetime.now().date()
 cutoff = today + timedelta(days=EXPIRY_LIMIT_DAYS)
 
-# ------------------ PART 1: EARNINGS/DIVIDENDS RISK CHECK (same as original) ------------------
+# ------------------ PART 1: EARNINGS/DIVIDENDS RISK CHECK ------------------
 safe_tickers = []
 risky_msgs = []
 safe_count = 0
@@ -176,14 +174,14 @@ if safe_rows:
 summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
 send_telegram_message("\n".join(summary_lines))
 
-# ------------------ PART 2: ROBINHOOD OPTIONS (UPDATED FOR PUTS LOGIC) ------------------
+# ------------------ PART 2: ROBINHOOD OPTIONS ------------------
 all_options = []
 for TICKER in safe_tickers:
     try:
         current_price = float(r.stocks.get_latest_price(TICKER)[0])
         rh_url = f"https://robinhood.com/stocks/{TICKER}"
 
-        # historicals for chart and low calculations
+        # historicals
         historicals = r.stocks.get_stock_historicals(TICKER, interval='day', span='month', bounds='regular')
         df = pd.DataFrame(historicals)
         df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
@@ -206,7 +204,7 @@ for TICKER in safe_tickers:
         distance_pct = distance_from_low / month_low
         proximity = "🔺 Closer to 1M High" if abs(current_price - month_high) < abs(current_price - month_low) else "🔻 Closer to 1M Low"
 
-        # find tradable puts, filter expirations within cutoff and limit to NUM_EXPIRATIONS
+        # tradable puts
         all_puts = r.options.find_tradable_options(TICKER, optionType="put")
         exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))
         exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff]
@@ -217,7 +215,7 @@ for TICKER in safe_tickers:
         for exp_date in exp_dates:
             puts_for_exp = [opt for opt in all_puts if opt['expiration_date'] == exp_date]
 
-            # strikes below current price (closest first), skip first 2, take next 3
+            # strikes below current price
             strikes_below = sorted([float(opt['strike_price']) for opt in puts_for_exp if float(opt['strike_price']) < current_price], reverse=True)
             chosen_strikes = strikes_below[2:5]  # skip the closest 2 below, take the next 3
 
@@ -232,12 +230,11 @@ for TICKER in safe_tickers:
                     continue
                 md = market_data[0]
 
-                # Use Robinhood-provided fields exactly
-                # Ask price (price you'd receive for selling the put per your instruction)
+                # Bid price (what you'd receive for selling)
                 try:
-                    ask_price = float(md.get('ask_price') or md.get('mark_price') or 0.0)
+                    bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
                 except:
-                    ask_price = 0.0
+                    bid_price = 0.0
 
                 try:
                     delta = float(md.get('delta')) if md.get('delta') not in (None, '', 'null') else 0.0
@@ -254,14 +251,14 @@ for TICKER in safe_tickers:
                 except:
                     cop_short = 0.0
 
-                # filter by ask price min
-                if ask_price >= MIN_PRICE:
+                # filter by bid price min
+                if bid_price >= MIN_PRICE:
                     candidate_puts.append({
                         "Ticker": TICKER,
                         "Current Price": current_price,
                         "Expiration Date": exp_date,
                         "Strike Price": strike,
-                        "Ask Price": ask_price,
+                        "Bid Price": bid_price,
                         "Delta": delta,
                         "IV": iv,
                         "COP Short": cop_short,
@@ -271,11 +268,11 @@ for TICKER in safe_tickers:
                         "Distance From Low %": distance_pct
                     })
 
-        # select top NUM_PUTS across expirations by COP Short
+        # select top NUM_PUTS
         selected_puts = sorted(candidate_puts, key=lambda x: x['COP Short'], reverse=True)[:NUM_PUTS]
         all_options.extend(selected_puts)
 
-        # send the same-format individual alert (descriptors)
+        # send alert
         selected_strikes = [p['Strike Price'] for p in selected_puts]
         msg_lines = [
             f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}",
@@ -285,13 +282,12 @@ for TICKER in safe_tickers:
         for p in selected_puts:
             msg_lines.append(f"📅 Expiration: {p['Expiration Date']}")
             msg_lines.append(f"💲 Strike   : ${p['Strike Price']}")
-            msg_lines.append(f"💰 Ask Price: ${p['Ask Price']:.2f}")
+            msg_lines.append(f"💰 Bid Price: ${p['Bid Price']:.2f}")
             msg_lines.append(f"🔺 Delta    : {p['Delta']:.3f}")
             msg_lines.append(f"📈 IV      : {p['IV']*100:.2f}%")
             msg_lines.append(f"🎯 COP(S)  : {p['COP Short']*100:.2f}%")
             msg_lines.append(f"📉 Dist. from 1M Low: {p['Distance From Low %']*100:.1f}%\n")
 
-        # combined chart (no strike lines)
         if selected_puts:
             buf = plot_candlestick(df, current_price, last_14_low, selected_strikes)
             send_telegram_photo(buf, "\n".join(msg_lines))
@@ -301,21 +297,19 @@ for TICKER in safe_tickers:
 
 # ------------------ BEST OPTION ALERT ------------------
 if all_options:
-    # pick best by COP Short (higher COP Short preferred)
     best = max(all_options, key=lambda x: (x['COP Short'], x['Distance From Low %']))
     msg_lines = [
         "🔥 <b>Best Cash-Secured Put</b>:",
         f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Current Price']:.2f}",
         f"✅ Expiration : {best['Expiration Date']}",
         f"💲 Strike    : {best['Strike Price']}",
-        f"💰 Ask Price : ${best['Ask Price']:.2f}",
+        f"💰 Bid Price : ${best['Bid Price']:.2f}",
         f"🔺 Delta     : {best['Delta']:.3f}",
         f"📈 IV       : {best['IV']*100:.2f}%",
         f"🎯 COP Short : {best['COP Short']*100:.1f}%",
         f"📉 Dist. from 1M Low: {best['Distance From Low %']*100:.1f}%"
     ]
 
-    # get historicals for best ticker to replot with strike line
     historicals = r.stocks.get_stock_historicals(best['Ticker'], interval='day', span='month', bounds='regular')
     df = pd.DataFrame(historicals)
     df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
