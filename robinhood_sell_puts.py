@@ -134,7 +134,12 @@ individual_alerts = []
 for TICKER in TICKERS:
     try:
         current_price = float(r.stocks.get_latest_price(TICKER)[0])
-        rh_url = f"https://robinhood.com/stocks/{TICKER}"
+    try:
+    instrument = r.stocks.get_instruments_by_symbols(TICKER)[0]
+    rh_url = instrument["url"].replace("https://api.robinhood.com/instruments/", "https://robinhood.com/instruments/")
+    except Exception:
+    # fallback to stocks URL if instrument not found
+    rh_url = f"https://robinhood.com/stocks/{TICKER}"
 
         historicals = r.stocks.get_stock_historicals(TICKER, interval='day', span='month', bounds='regular')
         df = pd.DataFrame(historicals)
@@ -286,3 +291,4 @@ else:
     send_telegram_message("⚠️ No valid options found across tickers.")
 
 # End of script
+
