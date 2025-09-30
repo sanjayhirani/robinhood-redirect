@@ -317,7 +317,7 @@ if all_options:
         f"📝 Adjusted Score: {adjusted
 
     f"📝 Adjusted Score: {adjusted_score(best):.2f}"
-    ]
+]
 
     # fetch historicals for plotting (safe fallback if RH call fails)
     try:
@@ -344,3 +344,4 @@ else:
     send_telegram_message("⚠️ No valid options found across tickers.")
 
 # End of script
+
