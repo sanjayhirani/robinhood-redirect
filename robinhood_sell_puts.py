@@ -1,25 +1,8 @@
-# robinhood_sell_puts_main_optimized.py
+# robinhood_sell_puts_grouped_all_options.py
 
-# ------------------ AUTO-INSTALL DEPENDENCIES (optional) ------------------
+import os
 import sys
 import subprocess
-import importlib.util
-
-# ---------------------------
-# Ensure minimal dependencies
-# ---------------------------
-def ensure(pkg):
-    try:
-        if importlib.util.find_spec(pkg) is None:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
-    except ModuleNotFoundError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
-
-for p in ("yfinance", "lxml", "robin_stocks", "matplotlib", "pandas", "numpy", "requests"):
-    ensure(p)
-
-# ------------------ OTHER IMPORTS ------------------
-import os
 import requests
 import robin_stocks.robinhood as r
 from datetime import datetime, timedelta
@@ -29,10 +12,20 @@ import io
 import numpy as np
 import pandas as pd
 
+# ------------------ AUTO-INSTALL DEPENDENCIES (if missing) ------------------
+def ensure(pkg):
+    import importlib
+    try:
+        importlib.import_module(pkg)
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+
+ensure("yfinance")
+import yfinance as yf
+
 # ------------------ CONFIG ------------------
-TICKERS = ["SNAP", "ACHR", "OPEN", "BBAI", "PTON", "ONDS", "GRAB", "LAC", "HTZ", "RZLV", "NVTS", "CLOV", "RIG", "LDI", "SPCE", "AMC", "LAZR"]
+TICKERS = ["SNAP","ACHR","OPEN","BBAI","PTON","ONDS","GRAB","LAC","HTZ","RZLV","NVTS","CLOV","RIG","LDI","SPCE","AMC","LAZR","RIOT","MARA","SOFI","PLTR","IAG","DNA"]
 NUM_EXPIRATIONS = 3
-NUM_PUTS = 2                  # top 2 puts per ticker for alerts
 MIN_PRICE = 0.10
 HV_PERIOD = 21
 CANDLE_WIDTH = 0.6
@@ -58,6 +51,17 @@ def send_telegram_message(msg):
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     )
+
+def prepare_historicals(df):
+    all_days = pd.date_range(start=df.index.min(), end=df.index.max(), freq='B')
+    df = df.reindex(all_days)
+    df.index = df.index.tz_localize(None)
+    df['close'] = df['close'].ffill()
+    df['open'] = df['open'].fillna(df['close'])
+    df['high'] = df['high'].fillna(df[['open','close']].max(axis=1))
+    df['low'] = df['low'].fillna(df[['open','close']].min(axis=1))
+    df['volume'] = df['volume'].fillna(0)
+    return df
 
 def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_date=None, show_strikes=True):
     fig, ax = plt.subplots(figsize=(12,6))
@@ -100,100 +104,62 @@ def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_
     plt.close()
     return buf
 
-def prepare_historicals(df):
-    all_days = pd.date_range(start=df.index.min(), end=df.index.max(), freq='B')
-    df = df.reindex(all_days)
-    df.index = df.index.tz_localize(None)
-    df['close'] = df['close'].ffill()
-    df['open'] = df['open'].fillna(df['close'])
-    df['high'] = df['high'].fillna(df[['open','close']].max(axis=1))
-    df['low'] = df['low'].fillna(df[['open','close']].min(axis=1))
-    df['volume'] = df['volume'].fillna(0)
-    return df
-
 # ------------------ LOGIN ------------------
 r.login(USERNAME, PASSWORD)
 today = datetime.now().date()
 cutoff = today + timedelta(days=EXPIRY_LIMIT_DAYS)
 
-# ------------------ PART 1: EARNINGS/DIVIDENDS RISK CHECK ------------------
+# ------------------ RISK CHECK ------------------
 safe_tickers = []
 risky_msgs = []
-safe_count = 0
-risky_count = 0
 
 for ticker in TICKERS:
     try:
-        stock = yfinance.Ticker(ticker)
-        msg_parts = [f"📊 <b>{ticker}</b>"]
+        stock = yf.Ticker(ticker)
         has_event = False
-
-        # Dividends
+        msg_parts = [f"📊 <b>{ticker}</b>"]
         try:
             future_divs = stock.dividends[stock.dividends.index.date >= today]
-            if not future_divs.empty:
-                div_date = future_divs.index.min().date()
-                if div_date <= cutoff:
-                    msg_parts.append(f"⚠️ 💰 Dividend on {div_date.strftime('%d-%m-%y')}")
-                    has_event = True
-        except Exception as e:
-            msg_parts.append(f"⚠️ Dividend check error: {e}")
+            if not future_divs.empty and future_divs.index.min().date() <= cutoff:
+                msg_parts.append(f"⚠️ 💰 Dividend on {future_divs.index.min().date().strftime('%d-%m-%y')}")
+                has_event = True
+        except: pass
 
-        # Earnings
         try:
             earnings_dates = stock.get_earnings_dates(limit=2)
             if not earnings_dates.empty:
-                earnings_date = earnings_dates.index.min().date()
-                if today <= earnings_date <= cutoff:
-                    msg_parts.append(f"⚠️ 📢 Earnings on {earnings_date.strftime('%d-%m-%y')}")
+                ed = earnings_dates.index.min().date()
+                if today <= ed <= cutoff:
+                    msg_parts.append(f"⚠️ 📢 Earnings on {ed.strftime('%d-%m-%y')}")
                     has_event = True
-        except Exception as e:
-            msg_parts.append(f"⚠️ Earnings check error: {e}")
+        except: pass
 
         if has_event:
             risky_msgs.append(" | ".join(msg_parts))
-            risky_count += 1
         else:
             safe_tickers.append(ticker)
-            safe_count += 1
-
     except Exception as e:
-        risky_msgs.append(f"⚠️ <b>{ticker}</b> error: {e}")
-        risky_count += 1
+        risky_msgs.append(f"⚠️ {ticker} error: {e}")
 
-summary_lines = []
 if risky_msgs:
-    summary_lines.append("⚠️ <b>Risky Tickers</b>\n" + "\n".join(risky_msgs) + "\n")
+    send_telegram_message("⚠️ <b>Risky Tickers</b>\n" + "\n".join(risky_msgs))
 else:
-    summary_lines.append("⚠️ <b>No risky tickers found 🎉</b>\n")
+    send_telegram_message("✅ <b>No risky tickers found 🎉</b>")
 
-safe_tickers_sorted = sorted(safe_tickers)
-safe_bold = [f"<b>{t}</b>" for t in safe_tickers_sorted]
-safe_rows = [", ".join(safe_bold[i:i+4]) for i in range(0, len(safe_bold), 4)]
-if safe_rows:
-    summary_lines.append("✅ <b>Safe Tickers</b>\n" + "\n".join(safe_rows))
-
-summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
-send_telegram_message("\n".join(summary_lines))
-
-# ------------------ PART 2: ROBINHOOD OPTIONS ------------------
+# ------------------ OPTIONS PROCESSING ------------------
 all_options = []
+grouped_msgs = []
 candidate_scores = []
 
-# Get buying power
 account_data = r.profiles.load_account_profile()
 buying_power = float(account_data['cash_available_for_withdrawal'])
 
-grouped_alerts = []
-group_size = 3
-ticker_options_dict = {}
-
-for TICKER in safe_tickers:
+for ticker in safe_tickers:
     try:
-        current_price = float(r.stocks.get_latest_price(TICKER)[0])
-        rh_url = f"https://robinhood.com/stocks/{TICKER}"
+        current_price = float(r.stocks.get_latest_price(ticker)[0])
+        rh_url = f"https://robinhood.com/stocks/{ticker}"
 
-        historicals = r.stocks.get_stock_historicals(TICKER, interval='day', span='month', bounds='regular')
+        historicals = r.stocks.get_stock_historicals(ticker, interval='day', span='month', bounds='regular')
         df = pd.DataFrame(historicals)
         df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
         df.set_index('begins_at', inplace=True)
@@ -202,23 +168,23 @@ for TICKER in safe_tickers:
         df = prepare_historicals(df)
         last_14_low = df['low'][-LOW_DAYS:].min()
 
-        all_puts = r.options.find_tradable_options(TICKER, optionType="put")
+        df['returns'] = np.log(df['close'] / df['close'].shift(1))
+        hv = df['returns'].rolling(HV_PERIOD).std().iloc[-1] * np.sqrt(252)
+
+        all_puts = r.options.find_tradable_options(ticker, optionType="put")
         exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))
-        exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff]
-        exp_dates = exp_dates[:NUM_EXPIRATIONS]
+        exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff][:NUM_EXPIRATIONS]
 
         candidate_puts = []
+
         for exp_date in exp_dates:
             puts_for_exp = [opt for opt in all_puts if opt['expiration_date'] == exp_date]
             strikes_below = sorted([float(opt['strike_price']) for opt in puts_for_exp if float(opt['strike_price']) < current_price], reverse=True)
-            chosen_strikes = strikes_below[:NUM_PUTS]
-
             for opt in puts_for_exp:
                 strike = float(opt['strike_price'])
-                if strike not in chosen_strikes:
+                if strike not in strikes_below:
                     continue
                 md = r.options.get_option_market_data_by_id(opt['id'])[0]
-
                 bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
                 delta = float(md.get('delta') or 0.0)
                 iv = float(md.get('implied_volatility') or 0.0)
@@ -226,13 +192,12 @@ for TICKER in safe_tickers:
                 theta = float(md.get('theta') or 0.0)
                 open_interest = int(md.get('open_interest') or 0)
                 volume = int(md.get('volume') or 0)
-                dist_from_low = (strike - last_14_low)/last_14_low
-                if dist_from_low < 0.03:  # avoid too close to 14-day low
-                    continue
 
                 if bid_price >= MIN_PRICE:
+                    max_contracts = max(1, int(buying_power // (strike * 100)))
+                    total_premium = bid_price * 100 * max_contracts
                     candidate_puts.append({
-                        "Ticker": TICKER,
+                        "Ticker": ticker,
                         "Current Price": current_price,
                         "Expiration Date": exp_date,
                         "Strike Price": strike,
@@ -243,61 +208,60 @@ for TICKER in safe_tickers:
                         "Theta": theta,
                         "Open Interest": open_interest,
                         "Volume": volume,
-                        "Dist from Low": dist_from_low,
-                        "URL": rh_url
+                        "Dist from Low": (strike - last_14_low)/last_14_low,
+                        "URL": rh_url,
+                        "HV": hv,
+                        "Max Contracts": max_contracts,
+                        "Total Premium": total_premium
                     })
 
-        top2_puts = sorted(candidate_puts, key=lambda x: x['COP Short'], reverse=True)[:2]
-        ticker_options_dict[TICKER] = top2_puts
-        all_options.extend(top2_puts)
+        all_options.extend(candidate_puts)
 
-    except Exception as e:
-        send_telegram_message(f"⚠️ Error processing {TICKER}: {e}")
-
-# ------------------ SEND GROUPED TICKER ALERTS ------------------
-tickers = list(ticker_options_dict.keys())
-for i in range(0, len(tickers), group_size):
-    group = tickers[i:i+group_size]
-    msg_lines = []
-    for t in group:
-        for idx, p in enumerate(ticker_options_dict[t], start=1):
-            max_contracts = max(1, int(buying_power // (p['Strike Price'] * 100)))
-            total_premium = p['Bid Price'] * 100 * max_contracts
-            msg_lines.append(
-                f"🔥 <a href='{p['URL']}'>{t}</a> current: ${p['Current Price']:.2f}\n"
+        ticker_msg = [f"📊 <a href='{rh_url}'>{ticker}</a> current: ${current_price:.2f}"]
+        for p in candidate_puts:
+            ticker_msg.append(
                 f"✅ Expiration : {p['Expiration Date']}\n"
                 f"💲 Strike    : {p['Strike Price']}\n"
                 f"💰 Bid Price : ${p['Bid Price']:.2f}\n"
                 f"🔺 Delta     : {p['Delta']:.3f}\n"
                 f"📈 IV       : {p['IV']*100:.2f}%\n"
                 f"🎯 COP Short : {p['COP Short']*100:.1f}%\n"
-                f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}\n"
+                f"📝 Max Contracts: {p['Max Contracts']} | Total Premium: ${p['Total Premium']:.2f}\n"
                 "────────────────────────────"
             )
-    send_telegram_message("\n".join(msg_lines))
+            days_to_exp = (pd.to_datetime(p['Expiration Date']).date() - today).days
+            iv_hv_ratio = p['IV']/p['HV'] if p['HV']>0 else 1.0
+            liquidity_weight = 1 + 0.5*(p['Volume']+p['Open Interest'])/1000
+            score = p['Total Premium'] * iv_hv_ratio * liquidity_weight / (days_to_exp**1.0)
+            candidate_scores.append((p['Ticker'], p['Strike Price'], p['Expiration Date'], score))
 
-# ------------------ SEND CANDIDATE SCORES (TOP 10) ------------------
+        grouped_msgs.append(ticker_msg)
+
+    except Exception as e:
+        send_telegram_message(f"⚠️ Error processing {ticker}: {e}")
+
+# ------------------ SEND GROUPED ALERTS (every 3 tickers) ------------------
+for i in range(0, len(grouped_msgs), 3):
+    msg = "\n\n".join(["\n".join(g) for g in grouped_msgs[i:i+3]])
+    send_telegram_message(msg)
+
+# ------------------ CANDIDATE SCORES ALERT (Top 10) ------------------
+candidate_scores.sort(key=lambda x: x[3], reverse=True)
+score_msg = "📊 <b>Top 10 Candidate Scores</b>\n"
+for t, strike, exp, score in candidate_scores[:10]:
+    score_msg += f"{t} | Exp: {exp} | Strike: {strike} | Score: {score:.2f}\n"
+send_telegram_message(score_msg)
+
+# ------------------ BEST ALERT ------------------
 def adjusted_score(opt):
     days_to_exp = (pd.to_datetime(opt['Expiration Date']).date() - today).days
-    if days_to_exp <= 0:
-        return 0
+    if days_to_exp <= 0: return 0
+    iv_hv_ratio = opt['IV']/opt['HV'] if opt['HV']>0 else 1.0
     liquidity_weight = 1 + 0.5*(opt['Volume']+opt['Open Interest'])/1000
-    return opt['Bid Price'] * 100 * liquidity_weight * opt['COP Short'] / (days_to_exp**1.0)
+    return opt['Total Premium'] * iv_hv_ratio * liquidity_weight / (days_to_exp**1.0)
 
-if all_options:
-    candidate_scores = sorted(all_options, key=adjusted_score, reverse=True)[:10]
-    score_msg = "📊 Top 10 Candidate Scores\n"
-    for p in candidate_scores:
-        score_msg += (f"{p['Ticker']} | Exp: {p['Expiration Date']} | Strike: {p['Strike Price']} | "
-                      f"Score: {adjusted_score(p):.2f}\n")
-    send_telegram_message(score_msg)
-
-# ------------------ BEST OPTION ALERT ------------------
 if all_options:
     best = max(all_options, key=adjusted_score)
-    max_contracts = max(1, int(buying_power // (best['Strike Price'] * 100)))
-    total_premium = best['Bid Price'] * 100 * max_contracts
-
     historicals = r.stocks.get_stock_historicals(best['Ticker'], interval='day', span='month', bounds='regular')
     df = pd.DataFrame(historicals)
     df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
@@ -308,7 +272,7 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
 
-    msg_lines = [
+    best_msg = [
         "🔥 <b>Best Cash-Secured Put (Max Premium)</b>:",
         f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Current Price']:.2f}",
         f"✅ Expiration : {best['Expiration Date']}",
@@ -317,7 +281,7 @@ if all_options:
         f"🔺 Delta     : {best['Delta']:.3f}",
         f"📈 IV       : {best['IV']*100:.2f}%",
         f"🎯 COP Short : {best['COP Short']*100:.1f}%",
-        f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
-        f"📝 Adjusted Score: {adjusted_score(best):.2f}"
+        f"📝 Max Contracts: {best['Max Contracts']} | Total Premium: ${best['Total Premium']:.2f}",
+        f"📝 Score: {adjusted_score(best):.2f}"
     ]
-    send_telegram_photo(buf, "\n".join(msg_lines))
+    send_telegram_photo(buf, "\n".join(best_msg))
