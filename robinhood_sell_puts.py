@@ -326,7 +326,6 @@ if all_options:
         f"🔺 Delta     : {best['Delta']:.3f}",
         f"🎯 COP Short : {best['COP Short']*100:.1f}%",
         f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
-        f"📝 Adjusted Score: {adjusted_score(best):.2f}"
     ]
 
     historicals = r.stocks.get_stock_historicals(best['Ticker'], interval='day', span='month', bounds='regular')
@@ -339,3 +338,4 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
+
