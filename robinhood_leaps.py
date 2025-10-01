@@ -12,8 +12,6 @@ import io
 import yaml
 from datetime import datetime, timedelta
 import yfinance as yf
-import re
-from bs4 import BeautifulSoup
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 def ensure_package(pkg_name):
@@ -22,14 +20,14 @@ def ensure_package(pkg_name):
     except ImportError:
         subprocess.check_call([os.sys.executable, "-m", "pip", "install", pkg_name])
 
-for pkg in ["pandas","numpy","matplotlib","requests","robin_stocks","yfinance","PyYAML","beautifulsoup4"]:
+for pkg in ["pandas","numpy","matplotlib","requests","robin_stocks","yfinance","PyYAML"]:
     ensure_package(pkg)
 
 # ------------------ CONFIG ------------------
 with open("config.yaml", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
-LEAPS_TOP_N = config.get("leaps_top_n", 20)
+LEAPS_TOP_N = config.get("leaps_top_n", 50)
 MIN_PRICE = config.get("leaps_min_price", 5)
 LEAPS_OUTPUT_FILE = "leapstickers.txt"
 
@@ -77,31 +75,41 @@ def plot_stock_with_strike(df, current_price, strike_price):
     plt.close()
     return buf
 
-# ------------------ STEP 1: GENERATE TOP LEAPS CANDIDATES ------------------
-print("Fetching optionable stocks list...")
-try:
-    url = "https://www.cboe.com/us/equities/market_statistics/"
-    r_page = requests.get(url)
-    soup = BeautifulSoup(r_page.text, "html.parser")
+# ------------------ STEP 1: FETCH NASDAQ + NYSE LISTINGS ------------------
+def fetch_all_tickers():
+    nasdaq_url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt"
+    nyse_url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/otherlisted.txt"
 
-    tickers = []
-    tables = soup.find_all("table")
-    for table in tables:
-        df = pd.read_html(str(table))[0]
-        if 'Symbol' in df.columns:
-            tickers.extend(df['Symbol'].tolist())
+    nasdaq_df = pd.read_csv(nasdaq_url, sep='|')
+    nyse_df = pd.read_csv(nyse_url, sep='|', dtype=str)
 
-    tickers = [re.sub(r'[^A-Z0-9.-]', '', t.upper()) for t in tickers if re.match(r'^[A-Z]+$', t)]
-    tickers = list(set(tickers))
-    print(f"Found {len(tickers)} optionable stocks.")
-except Exception as e:
-    send_telegram_message(f"Error fetching optionable stocks: {e}")
-    tickers = []
+    nasdaq_tickers = nasdaq_df['Symbol'].tolist()
+    nyse_tickers = nyse_df['ACT Symbol'].tolist()
 
-filtered_candidates = []
+    all_tickers = list(set(nasdaq_tickers + nyse_tickers))
+    all_tickers = [t.strip().upper() for t in all_tickers if t.strip() != ""]
+    return all_tickers
+
+def is_optionable(ticker):
+    try:
+        t = yf.Ticker(ticker)
+        return len(t.options) > 0
+    except:
+        return False
+
+print("Fetching NASDAQ + NYSE tickers...")
+all_tickers = fetch_all_tickers()
+print(f"Total tickers fetched: {len(all_tickers)}")
+
+# Filter only optionable tickers
+optionable_tickers = [t for t in all_tickers if is_optionable(t)]
+print(f"Optionable tickers found: {len(optionable_tickers)}")
+
+# ------------------ STEP 2: FILTER & SCORE ------------------
 today = datetime.now().date()
+candidates = []
 
-for t in tickers:
+for t in optionable_tickers:
     try:
         stock = yf.Ticker(t)
         hist = stock.history(period="1y")['Close']
@@ -132,13 +140,13 @@ for t in tickers:
         score += min(avg_vol/1e6, 2)
 
         if score > 0:
-            filtered_candidates.append({"Ticker": t, "Score": score, "Reasons": reasons})
+            candidates.append({"Ticker": t, "Score": score, "Reasons": reasons})
 
     except Exception:
         continue
 
-filtered_candidates.sort(key=lambda x: x['Score'], reverse=True)
-top_candidates = filtered_candidates[:LEAPS_TOP_N]
+candidates.sort(key=lambda x: x['Score'], reverse=True)
+top_candidates = candidates[:LEAPS_TOP_N]
 
 with open(LEAPS_OUTPUT_FILE, "w") as f:
     for c in top_candidates:
@@ -146,7 +154,7 @@ with open(LEAPS_OUTPUT_FILE, "w") as f:
 
 print(f"Saved top {len(top_candidates)} LEAPS candidates to {LEAPS_OUTPUT_FILE}")
 
-# ------------------ STEP 2: RUN LEAPS ALERTS ------------------
+# ------------------ STEP 3: RUN LEAPS ALERTS ------------------
 r.login(USERNAME, PASSWORD)
 
 for candidate in top_candidates:
