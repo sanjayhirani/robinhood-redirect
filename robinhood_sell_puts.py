@@ -222,10 +222,17 @@ for TICKER in safe_tickers:
 
         for exp_date in exp_dates:
             puts_for_exp = [opt for opt in all_puts if opt['expiration_date']==exp_date]
-            strikes_below = sorted([float(opt['strike_price']) for opt in puts_for_exp if float(opt['strike_price'])<current_price], reverse=True)
-            if len(strikes_below) <= 1:
-                continue
-            chosen_strikes = strikes_below[1:4]
+            strikes_below = sorted(
+                [float(opt['strike_price']) for opt in puts_for_exp if float(opt['strike_price']) < current_price],
+                reverse=True
+            )
+
+            if len(strikes_below) > 1:
+                # Skip the closest strike, take the next 3
+                chosen_strikes = strikes_below[1:4]
+            else:
+                # Fallback: just take whatever strikes are available
+                chosen_strikes = strikes_below
 
             for opt in puts_for_exp:
                 strike = float(opt['strike_price'])
@@ -347,3 +354,4 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
+
