@@ -1,49 +1,49 @@
-# config.yaml - Robinhood Sell Puts Scanner Configuration
+# config.yaml - Robinhood Sell Puts Scanner Config
 
-# ------------------ Files ------------------
-tickers_file: tickers.txt  # Text file with one ticker per line
+# ------------------ Input Tickers ------------------
+tickers_file: "tickers.txt"  # file containing one ticker per line
 
 # ------------------ General Settings ------------------
-num_expirations: 3        # Number of upcoming option expiration dates to check
-expiry_limit_days: 21     # Maximum days until expiration for options
-low_days: 14              # Number of days to calculate recent low
-hv_period: 21             # Historical volatility lookback period
+num_expirations: 3           # number of expiration dates to check per ticker
+expiry_limit_days: 21        # only consider options within this many days
+low_days: 14                 # lookback period for 14-day low
+hv_period: 21                # historical volatility period (in trading days)
 
 # ------------------ Option Filters ------------------
 option_filters:
-  min_bid_price: 0.10
-  min_distance_from_low: 0.01
-  max_selected_strikes: 3
+  max_selected_strikes: 3      # max strikes per expiration to consider
+  min_bid_price: 0.10          # minimum bid price for a put
+  min_distance_from_low: 0.01  # minimum % distance from 14-day low
 
 # ------------------ Historical Data ------------------
 historicals:
-  interval: day
-  span: month
-  bounds: regular
+  interval: "day"              # 'day', '5minute', etc.
+  span: "month"                # 'week', 'month', '3month', etc.
+  bounds: "regular"            # 'regular', 'extended'
 
-# ------------------ Plotting ------------------
+# ------------------ Plot Settings ------------------
 plot:
-  figsize: [12, 6]
-  background_color: black
-  candle_width: 0.6
-  current_price_color: magenta
-  low_price_color: yellow
-  strike_color: cyan
-  expiry_color: orange
+  figsize: [12,6]              # figure size [width,height]
+  background_color: "black"    # plot background
+  candle_width: 0.6            # width of candlesticks
+  current_price_color: "magenta"
+  low_price_color: "yellow"
+  strike_color: "cyan"
+  expiry_color: "orange"
 
 # ------------------ Telegram Labels ------------------
 telegram_labels:
   ticker_prefix: "📊"
   dividend_alert: "⚠️ 💰 Dividend on"
   earnings_alert: "⚠️ 📢 Earnings on"
-  safe_tickers: "✅ Safe Tickers"
   risky_tickers: "⚠️ Risky Tickers"
+  safe_tickers: "✅ Safe Tickers"
   best_put: "🔥 Best Cash-Secured Put"
 
-# ------------------ Candidate Scoring ------------------
+# ------------------ Scoring ------------------
 scoring:
+  min_hv: 0.05
+  default_iv: 1.0
   liquidity_weight_multiplier: 0.5
   total_premium_multiplier: 1.0
   days_exponent: 1.0
-  min_hv: 0.05
-  default_iv: 1.0
