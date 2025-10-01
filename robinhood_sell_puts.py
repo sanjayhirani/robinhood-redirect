@@ -2,24 +2,16 @@
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 
+# Minimal safeguard: only install if missing
 import sys
 import subprocess
-import pkg_resources
 
 def ensure_package(pkg_name):
     try:
         __import__(pkg_name)
     except ImportError:
+        print(f"⚠️ Package {pkg_name} missing, installing...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", pkg_name])
-
-# Ensure packages
-ensure_package("yfinance")
-ensure_package("lxml")
-ensure_package("robin_stocks")
-ensure_package("matplotlib")
-ensure_package("pandas")
-ensure_package("numpy")
-ensure_package("requests")
 
 # ------------------ OTHER IMPORTS ------------------
 
@@ -33,6 +25,15 @@ import io
 import numpy as np
 import pandas as pd
 import yfinance
+
+# Only ensure packages that might not be installed
+ensure_package("yfinance")
+ensure_package("pandas")
+ensure_package("numpy")
+ensure_package("matplotlib")
+ensure_package("robin_stocks")
+ensure_package("requests")
+ensure_package("lxml")
 
 # ------------------ CONFIG ------------------
 
@@ -363,6 +364,7 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
 
 
