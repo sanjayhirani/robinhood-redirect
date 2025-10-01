@@ -1,17 +1,49 @@
 # config.yaml - Robinhood Sell Puts Scanner Configuration
 
+# ------------------ Files ------------------
 tickers_file: tickers.txt  # Text file with one ticker per line
 
-# General settings
-num_expirations: 3        # How many upcoming option expiration dates to check
-min_price: 0.10           # Minimum bid price for options
-hv_period: 21             # Historical volatility lookback period
-candle_width: 0.6         # Width of candlesticks in plots
+# ------------------ General Settings ------------------
+num_expirations: 3        # Number of upcoming option expiration dates to check
+expiry_limit_days: 21     # Maximum days until expiration for options
 low_days: 14              # Number of days to calculate recent low
-expiry_limit_days: 21     # Max days until expiration for options
+hv_period: 21             # Historical volatility lookback period
 
-# Option filters
+# ------------------ Option Filters ------------------
 option_filters:
   min_bid_price: 0.10
   min_distance_from_low: 0.01
   max_selected_strikes: 3
+
+# ------------------ Historical Data ------------------
+historicals:
+  interval: day
+  span: month
+  bounds: regular
+
+# ------------------ Plotting ------------------
+plot:
+  figsize: [12, 6]
+  background_color: black
+  candle_width: 0.6
+  current_price_color: magenta
+  low_price_color: yellow
+  strike_color: cyan
+  expiry_color: orange
+
+# ------------------ Telegram Labels ------------------
+telegram_labels:
+  ticker_prefix: "📊"
+  dividend_alert: "⚠️ 💰 Dividend on"
+  earnings_alert: "⚠️ 📢 Earnings on"
+  safe_tickers: "✅ Safe Tickers"
+  risky_tickers: "⚠️ Risky Tickers"
+  best_put: "🔥 Best Cash-Secured Put"
+
+# ------------------ Candidate Scoring ------------------
+scoring:
+  liquidity_weight_multiplier: 0.5
+  total_premium_multiplier: 1.0
+  days_exponent: 1.0
+  min_hv: 0.05
+  default_iv: 1.0
