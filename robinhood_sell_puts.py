@@ -33,8 +33,21 @@ SCREENER_ID = "f5cb79e8-8251-4263-b06e-e937ff076c9e"
 
 def fetch_screener_tickers(screener_id):
     try:
+        # Use requests session with Bearer token from Robinhood login
+        token_data = r.authentication.get_access_token()
+        access_token = token_data.get('access_token')
+        if not access_token:
+            raise ValueError("No access token available after login.")
+
+        session = requests.Session()
+        session.headers.update({
+            'Authorization': f"Bearer {access_token}"
+        })
+
         url = f"https://api.robinhood.com/midlands/screener/{screener_id}/"
-        data = r.get(url)
+        response = session.get(url)
+        response.raise_for_status()
+        data = response.json()
         results = data.get('results', [])
         tickers = [item['instrument']['symbol'] for item in results]
         if not tickers:
@@ -368,6 +381,7 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
 
 
