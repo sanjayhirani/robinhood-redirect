@@ -1,4 +1,4 @@
-# robinhood_sell_puts_main_optimized.py  
+# robinhood_sell_puts_main_optimized.py   
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 
@@ -262,7 +262,7 @@ for TICKER in safe_tickers:
         selected_puts = sorted(candidate_puts, key=lambda x:x['COP Short'], reverse=True)[:3]
         all_options.extend(selected_puts)
 
-        # Individual alerts (no graphs, no hyperlinks, only delta from Greeks)
+        # Individual alerts (NO score shown here anymore)
         if selected_puts:
             msg_lines = [f"📊 {TICKER} current: ${current_price:.2f}"]
             for idx, p in enumerate(selected_puts, start=1):
@@ -296,8 +296,11 @@ if candidate_scores:
     for put, score in candidate_scores:
         max_contracts = max(1, int(buying_power // (put['Strike Price']*100)))
         total_premium = put['Bid Price']*100*max_contracts
-        score_msg += (f"{put['Ticker']} | Exp: {put['Expiration Date']} | Strike: ${put['Strike Price']} | "
-                      f"Max Contracts: {max_contracts} | Premium: ${total_premium:.2f} | Score: {score:.2f}\n")
+        score_msg += (
+            f"{put['Ticker']} | Exp: {put['Expiration Date']} | Strike: ${put['Strike Price']} | "
+            f"Max Contracts: {max_contracts} | Premium: ${total_premium:.2f} | Score: {score:.2f}\n"
+            "────────────────────────────\n"
+        )
     send_telegram_message(score_msg)
 
 # ------------------ Best Overall Option Alert ------------------
@@ -306,17 +309,23 @@ def adjusted_score(opt):
     days_to_exp = (pd.to_datetime(opt['Expiration Date']).date() - today).days
     if days_to_exp <= 0:
         return 0
-    iv_hv_ratio = opt.get('IV', 1.0)/max(opt.get('HV', 0.05), 0.05)
-    liquidity_weight = 1 + 0.5*(opt['Volume']+opt['Open Interest'])/1000
-    max_contracts = max(1, int(buying_power // (opt['Strike Price']*100)))
-    total_premium = opt['Bid Price']*100*max_contracts * opt['COP Short']
-    return total_premium * iv_hv_ratio * liquidity_weight / (days_to_exp**1.0)
+
+    hv_val = max(opt.get('HV', 0.05), 0.05)  # avoid div/0
+    iv_val = opt.get('IV', 1.0) or 1.0
+    iv_hv_ratio = iv_val / hv_val
+
+    liquidity_weight = 1 + 0.5 * (opt['Volume'] + opt['Open Interest']) / 1000
+    max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
+    total_premium = opt['Bid Price'] * 100 * max_contracts * opt['COP Short']
+
+    return total_premium * iv_hv_ratio * liquidity_weight / days_to_exp
 
 if all_options:
     best = max(all_options, key=adjusted_score)
     max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
     total_premium = best['Bid Price']*100*max_contracts
 
+    # Best alert (NO score shown here anymore)
     msg_lines = [
         "🔥 <b>Best Cash-Secured Put (Max Premium)</b>:",
         f"📊 {best['Ticker']} current: ${best['Current Price']:.2f}",
@@ -338,4 +347,3 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
-
