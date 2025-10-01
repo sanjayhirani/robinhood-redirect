@@ -302,7 +302,10 @@ for TICKER in safe_tickers:
 
 if candidate_scores:
     candidate_scores.sort(key=lambda x:x[1], reverse=True)
-    score_msg = "<b>📊 Candidate Put Scores (Best of Top 3 per Ticker)</b>\n"
+    score_msg = f"<b>📊 Candidate Put Scores (Best of Top 3 per Ticker)</b>\n"
+    score_msg += f"💰 Available to invest: ${buying_power:,.2f}\n"  # <-- NEW LINE
+    score_msg += "────────────────────────────\n"
+
     for put, score in candidate_scores:
         max_contracts = max(1, int(buying_power // (put['Strike Price']*100)))
         total_premium = put['Bid Price']*100*max_contracts
@@ -357,5 +360,6 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
 
