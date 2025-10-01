@@ -81,14 +81,15 @@ def fetch_all_tickers():
     nasdaq_url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt"
     nyse_url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/otherlisted.txt"
 
-    nasdaq_df = pd.read_csv(nasdaq_url, sep='|')
+    nasdaq_df = pd.read_csv(nasdaq_url, sep='|', dtype=str)
     nyse_df = pd.read_csv(nyse_url, sep='|', dtype=str)
 
-    nasdaq_tickers = nasdaq_df['Symbol'].tolist()
-    nyse_tickers = nyse_df['ACT Symbol'].tolist()
+    nasdaq_tickers = nasdaq_df['Symbol'].astype(str).tolist()
+    nyse_tickers = nyse_df['ACT Symbol'].astype(str).tolist()
 
     all_tickers = list(set(nasdaq_tickers + nyse_tickers))
-    all_tickers = [t.strip().upper() for t in all_tickers if t.strip() != ""]
+    # filter out empty or NaN-like entries
+    all_tickers = [str(t).strip().upper() for t in all_tickers if str(t).strip() not in ("", "nan", "NaN")]
     return all_tickers
 
 # ------------------ STEP 2: CHECK OPTIONABLE & SCORE ------------------
