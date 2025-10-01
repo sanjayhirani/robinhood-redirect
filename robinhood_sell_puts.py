@@ -36,11 +36,13 @@ import yfinance
 
 # ------------------ CONFIG ------------------
 
-TICKERS = [
-    "SNAP", "ACHR", "OPEN", "BBAI", "PTON", "ONDS",
-    "GRAB", "LAC", "HTZ", "RZLV", "NVTS", "CLOV",
-    "RIG", "LDI", "SPCE", "AMC", "LAZR"
-]
+# Read tickers from a text file (one ticker per line)
+TICKERS_FILE = "tickers.txt"
+if os.path.exists(TICKERS_FILE):
+    with open(TICKERS_FILE, "r") as f:
+        TICKERS = [line.strip().upper() for line in f if line.strip()]
+else:
+    raise FileNotFoundError(f"{TICKERS_FILE} not found. Please create the file with one ticker per line.")
 
 NUM_EXPIRATIONS = 3
 MIN_PRICE = 0.10
@@ -48,13 +50,6 @@ HV_PERIOD = 21
 CANDLE_WIDTH = 0.6
 LOW_DAYS = 14
 EXPIRY_LIMIT_DAYS = 21
-
-# ------------------ SECRETS ------------------
-
-USERNAME = os.environ["RH_USERNAME"]
-PASSWORD = os.environ["RH_PASSWORD"]
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 # ------------------ SECRETS ------------------
 
@@ -368,6 +363,7 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
 
 
