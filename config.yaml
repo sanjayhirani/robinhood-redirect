@@ -1,49 +1,32 @@
-# config.yaml - Robinhood Sell Puts Scanner Config
+# config.yaml
 
-# ------------------ Input Tickers ------------------
-tickers_file: "tickers.txt"  # file containing one ticker per line
+tickers_file: "tickers.txt"  # one ticker per line, emojis allowed for Telegram
 
-# ------------------ General Settings ------------------
-num_expirations: 3           # number of expiration dates to check per ticker
-expiry_limit_days: 21        # only consider options within this many days
-low_days: 14                 # lookback period for 14-day low
-hv_period: 21                # historical volatility period (in trading days)
+# Number of upcoming expiration dates to check
+num_expirations: 3
 
-# ------------------ Option Filters ------------------
-option_filters:
-  max_selected_strikes: 3      # max strikes per expiration to consider
-  min_bid_price: 0.10          # minimum bid price for a put
-  min_distance_from_low: 0.01  # minimum % distance from 14-day low
+# Minimum bid price for options
+min_price: 0.10
 
-# ------------------ Historical Data ------------------
-historicals:
-  interval: "day"              # 'day', '5minute', etc.
-  span: "month"                # 'week', 'month', '3month', etc.
-  bounds: "regular"            # 'regular', 'extended'
+# Days to calculate 14-day low
+low_days: 14
 
-# ------------------ Plot Settings ------------------
+# Maximum expiry days to consider
+expiry_limit_days: 21
+
+# Plot settings
 plot:
-  figsize: [12,6]              # figure size [width,height]
-  background_color: "black"    # plot background
-  candle_width: 0.6            # width of candlesticks
+  candle_width: 0.6
+  figsize: [12,6]
+  background_color: "black"
   current_price_color: "magenta"
   low_price_color: "yellow"
   strike_color: "cyan"
   expiry_color: "orange"
 
-# ------------------ Telegram Labels ------------------
+# Telegram message labels (can include emojis)
 telegram_labels:
-  ticker_prefix: "📊"
   dividend_alert: "⚠️ 💰 Dividend on"
   earnings_alert: "⚠️ 📢 Earnings on"
-  risky_tickers: "⚠️ Risky Tickers"
-  safe_tickers: "✅ Safe Tickers"
-  best_put: "🔥 Best Cash-Secured Put"
-
-# ------------------ Scoring ------------------
-scoring:
-  min_hv: 0.05
-  default_iv: 1.0
-  liquidity_weight_multiplier: 0.5
-  total_premium_multiplier: 1.0
-  days_exponent: 1.0
+  risky_tickers: "⚠️ <b>Risky Tickers</b>"
+  safe_tickers: "✅ <b>Safe Tickers</b>"
