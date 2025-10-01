@@ -241,30 +241,33 @@ for TICKER in safe_tickers:
 
                 md = r.options.get_option_market_data_by_id(opt['id'])[0]
                 bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
-                if bid_price <= 0.05:
-                    continue
 
+                # Require only the main threshold now
+                if bid_price < MIN_PRICE:
+                    continue
+                
                 delta = float(md.get('delta') or 0.0)
                 cop_short = float(md.get('chance_of_profit_short') or 0.0)
                 open_interest = int(md.get('open_interest') or 0)
                 volume = int(md.get('volume') or 0)
-                dist_from_low = (strike - last_14_low)/last_14_low
-                if dist_from_low < 0.03:
+                
+                # Loosen the 14-day low distance requirement
+                dist_from_low = (strike - last_14_low) / last_14_low
+                if dist_from_low < 0.01:
                     continue
-
-                if bid_price >= MIN_PRICE:
-                    candidate_puts.append({
-                        "Ticker": TICKER,
-                        "Current Price": current_price,
-                        "Expiration Date": exp_date,
-                        "Strike Price": strike,
-                        "Bid Price": bid_price,
-                        "Delta": delta,
-                        "COP Short": cop_short,
-                        "Open Interest": open_interest,
-                        "Volume": volume,
-                        "HV": hv
-                    })
+                
+                candidate_puts.append({
+                    "Ticker": TICKER,
+                    "Current Price": current_price,
+                    "Expiration Date": exp_date,
+                    "Strike Price": strike,
+                    "Bid Price": bid_price,
+                    "Delta": delta,
+                    "COP Short": cop_short,
+                    "Open Interest": open_interest,
+                    "Volume": volume,
+                    "HV": hv
+                })
 
         selected_puts = sorted(candidate_puts, key=lambda x:x['COP Short'], reverse=True)[:3]
         all_options.extend(selected_puts)
@@ -354,4 +357,5 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
