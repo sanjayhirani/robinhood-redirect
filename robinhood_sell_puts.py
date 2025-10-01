@@ -36,11 +36,25 @@ import yfinance
 
 # ------------------ CONFIG ------------------
 
-TICKERS = [
-    "SNAP", "ACHR", "OPEN", "BBAI", "PTON", "ONDS",
-    "GRAB", "LAC", "HTZ", "RZLV", "NVTS", "CLOV",
-    "RIG", "LDI", "SPCE", "AMC", "LAZR"
-]
+# ------------------ FETCH TICKERS FROM CUSTOM ROBINHOOD SCREENER ------------------
+
+SCREENER_ID = "f5cb79e8-8251-4263-b06e-e937ff076c9e"
+
+def fetch_screener_tickers(screener_id):
+    try:
+        url = f"https://api.robinhood.com/midlands/screener/{screener_id}/"
+        data = r.get(url)
+        results = data.get('results', [])
+        tickers = [item['instrument']['symbol'] for item in results]
+        return sorted(tickers)
+    except Exception as e:
+        send_telegram_message(f"⚠️ Failed to fetch tickers from screener: {e}")
+        return []
+
+# Login first
+r.login(USERNAME, PASSWORD)
+TICKERS = fetch_screener_tickers(SCREENER_ID)
+
 NUM_EXPIRATIONS = 3
 MIN_PRICE = 0.10
 HV_PERIOD = 21
@@ -360,6 +374,7 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
 
 
