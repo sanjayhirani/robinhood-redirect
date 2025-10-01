@@ -29,7 +29,7 @@ for pkg in ["pandas","numpy","matplotlib","requests","robin_stocks","yfinance","
 with open("config.yaml", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
-LEAPS_TOP_N = config.get("leaps_top_n", 50)
+LEAPS_TOP_N = config.get("leaps_top_n", 20)
 MIN_PRICE = config.get("leaps_min_price", 5)
 LEAPS_OUTPUT_FILE = "leapstickers.txt"
 
