@@ -1,43 +1,34 @@
-# robinhood_sell_puts_main_optimized.py   
-
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
-
 import sys
 import subprocess
-import pkg_resources
-
-def ensure_package(pkg_name):
-    try:
-        __import__(pkg_name)
-    except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg_name])
-
-# Ensure packages
-ensure_package("yfinance")
-ensure_package("lxml")
-ensure_package("robin_stocks")
-ensure_package("matplotlib")
-ensure_package("pandas")
-ensure_package("numpy")
-ensure_package("requests")
 
 # ------------------ OTHER IMPORTS ------------------
-
 import os
 import requests
-import robin_stocks.robinhood as r
 from datetime import datetime, timedelta
+import io
+
+import robin_stocks.robinhood as r
+import yfinance
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import io
 import numpy as np
 import pandas as pd
-import yfinance
 
-# ------------------ CONFIG ------------------
+# ------------------ SECRETS ------------------
+USERNAME = os.environ["RH_USERNAME"]
+PASSWORD = os.environ["RH_PASSWORD"]
+TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+
+# ------------------ LOGIN ------------------
+try:
+    r.login(USERNAME, PASSWORD)
+except Exception as e:
+    print(f"⚠️ Robinhood login failed: {e}")
+    raise
 
 # ------------------ FETCH TICKERS FROM CUSTOM ROBINHOOD SCREENER ------------------
-
 SCREENER_ID = "f5cb79e8-8251-4263-b06e-e937ff076c9e"
 
 def fetch_screener_tickers(screener_id):
@@ -46,14 +37,17 @@ def fetch_screener_tickers(screener_id):
         data = r.get(url)
         results = data.get('results', [])
         tickers = [item['instrument']['symbol'] for item in results]
+        if not tickers:
+            print("⚠️ No tickers found in screener. Check screener ID or permissions.")
         return sorted(tickers)
     except Exception as e:
-        send_telegram_message(f"⚠️ Failed to fetch tickers from screener: {e}")
+        print(f"⚠️ Failed to fetch tickers from screener: {e}")
         return []
 
-# Login first
-r.login(USERNAME, PASSWORD)
 TICKERS = fetch_screener_tickers(SCREENER_ID)
+
+if not TICKERS:
+    raise ValueError("No tickers retrieved from screener. Exiting script.")
 
 NUM_EXPIRATIONS = 3
 MIN_PRICE = 0.10
@@ -374,6 +368,7 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
 
 
