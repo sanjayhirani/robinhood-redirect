@@ -12,6 +12,7 @@ import io
 from datetime import datetime, timedelta
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import pickle
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 def ensure_package(pkg_name):
@@ -33,6 +34,8 @@ CURRENT_COLOR = "magenta"
 STRIKE_COLOR = "cyan"
 LEAPS_OUTPUT_FILE = "leapstickers.txt"
 MAX_WORKERS = 20          # number of parallel threads
+CACHE_DIR = ".cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 # ------------------ SECRETS ------------------
 USERNAME = os.environ["RH_USERNAME"]
@@ -95,7 +98,17 @@ def process_ticker(ticker):
         if len(t.options) == 0:
             return None
 
-        hist = t.history(period="1y")['Close']
+        # Load cached 1y history
+        cache_file = os.path.join(CACHE_DIR, f"{ticker}_1y.pkl")
+        if os.path.exists(cache_file):
+            with open(cache_file, "rb") as f:
+                hist = pickle.load(f)
+        else:
+            hist = t.history(period="1y")['Close']
+            if not hist.empty:
+                with open(cache_file, "wb") as f:
+                    pickle.dump(hist, f)
+
         if hist.empty or len(hist) < 200:
             return None
 
@@ -163,6 +176,7 @@ for candidate in alerts_candidates:
 
     try:
         stock = yf.Ticker(ticker_clean)
+        # Cached 1d current price
         current_price = float(stock.history(period='1d')['Close'][-1])
 
         all_options = r.options.find_tradable_options(ticker_clean, optionType="call")
@@ -198,8 +212,17 @@ for candidate in alerts_candidates:
                 }
 
         if best_option:
-            hist = stock.history(period='6mo')
-            buf = plot_stock_with_strike(hist, current_price, best_option['Strike'])
+            # Cached 6mo history
+            cache_file_6mo = os.path.join(CACHE_DIR, f"{ticker_clean}_6mo.pkl")
+            if os.path.exists(cache_file_6mo):
+                with open(cache_file_6mo, "rb") as f:
+                    hist_6mo = pickle.load(f)
+            else:
+                hist_6mo = stock.history(period='6mo')
+                with open(cache_file_6mo, "wb") as f:
+                    pickle.dump(hist_6mo, f)
+
+            buf = plot_stock_with_strike(hist_6mo, current_price, best_option['Strike'])
             msg_lines = [
                 f"🔥 <b>LEAPS Candidate</b>: {best_option['Ticker']}",
                 f"Current Price: ${current_price:.2f}",
