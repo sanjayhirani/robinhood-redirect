@@ -16,12 +16,13 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Cache installed site-packages
+      - name: Cache installed site-packages & stock data
         uses: actions/cache@v3
         with:
           path: |
             ~/.local/lib/python3.11/site-packages
             ~/.cache/pip
+            .cache
           key: ${{ runner.os }}-python3.11-packages-${{ hashFiles('**/robinhood_leaps.py') }}
           restore-keys: |
             ${{ runner.os }}-python3.11-packages-
