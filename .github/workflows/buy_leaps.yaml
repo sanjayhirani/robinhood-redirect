@@ -3,7 +3,7 @@ name: Robinhood LEAPS Scanner
 on:
   workflow_dispatch:
   schedule:
-    - cron: '30 15 * * 0'  # every Sunday at 11:30 AM ET
+    - cron: '30 15 * * 0'  # every Sunday at 11:30 AM ET (15:30 UTC)
 
 jobs:
   run-leaps-scanner:
@@ -16,13 +16,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Cache installed site-packages & stock data
+      - name: Cache installed site-packages
         uses: actions/cache@v3
         with:
           path: |
             ~/.local/lib/python3.11/site-packages
             ~/.cache/pip
-            .cache
           key: ${{ runner.os }}-python3.11-packages-${{ hashFiles('**/robinhood_leaps.py') }}
           restore-keys: |
             ${{ runner.os }}-python3.11-packages-
@@ -33,10 +32,9 @@ jobs:
           pip install robin_stocks==3.4.0 \
                       pandas==2.3.3 \
                       matplotlib==3.10.6 \
-                      numpy==2.3.3 \
-                      scipy==1.16.2 \
+                      yfinance==0.2.66 \
                       requests==2.32.5 \
-                      yfinance==0.2.66
+                      lxml==6.0.2
 
       - name: Run Robinhood LEAPS Scanner
         env:
