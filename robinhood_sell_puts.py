@@ -23,7 +23,10 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 # ------------------ LOGIN ------------------
 try:
-    r.login(USERNAME, PASSWORD)
+    login_info = r.login(USERNAME, PASSWORD)
+    ACCESS_TOKEN = login_info.get("access_token")
+    if not ACCESS_TOKEN:
+        raise ValueError("No access token returned from login.")
 except Exception as e:
     print(f"⚠️ Robinhood login failed: {e}")
     raise
@@ -31,25 +34,19 @@ except Exception as e:
 # ------------------ FETCH TICKERS FROM CUSTOM ROBINHOOD SCREENER ------------------
 SCREENER_ID = "f5cb79e8-8251-4263-b06e-e937ff076c9e"
 
-def fetch_screener_tickers(screener_id):
+def fetch_screener_tickers(screener_id, access_token):
     try:
-        # Use requests session with Bearer token from Robinhood login
-        token_data = r.authentication.get_access_token()
-        access_token = token_data.get('access_token')
-        if not access_token:
-            raise ValueError("No access token available after login.")
-
         session = requests.Session()
         session.headers.update({
-            'Authorization': f"Bearer {access_token}"
+            "Authorization": f"Bearer {access_token}"
         })
 
         url = f"https://api.robinhood.com/midlands/screener/{screener_id}/"
         response = session.get(url)
         response.raise_for_status()
         data = response.json()
-        results = data.get('results', [])
-        tickers = [item['instrument']['symbol'] for item in results]
+        results = data.get("results", [])
+        tickers = [item["instrument"]["symbol"] for item in results]
         if not tickers:
             print("⚠️ No tickers found in screener. Check screener ID or permissions.")
         return sorted(tickers)
@@ -57,7 +54,7 @@ def fetch_screener_tickers(screener_id):
         print(f"⚠️ Failed to fetch tickers from screener: {e}")
         return []
 
-TICKERS = fetch_screener_tickers(SCREENER_ID)
+TICKERS = fetch_screener_tickers(SCREENER_ID, ACCESS_TOKEN)
 
 if not TICKERS:
     raise ValueError("No tickers retrieved from screener. Exiting script.")
@@ -381,6 +378,7 @@ if all_options:
     last_14_low = df['low'][-LOW_DAYS:].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
 
 
