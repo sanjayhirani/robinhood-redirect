@@ -1,4 +1,4 @@
-# robinhood_leaps_alert_auto.py
+# robinhood_leaps.py
 
 import os
 import subprocess
@@ -9,7 +9,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import io
-import yaml
 from datetime import datetime, timedelta
 import yfinance as yf
 
@@ -20,15 +19,17 @@ def ensure_package(pkg_name):
     except ImportError:
         subprocess.check_call([os.sys.executable, "-m", "pip", "install", pkg_name])
 
-for pkg in ["pandas","numpy","matplotlib","requests","robin_stocks","yfinance","PyYAML"]:
+for pkg in ["pandas","numpy","matplotlib","requests","robin_stocks","yfinance"]:
     ensure_package(pkg)
 
 # ------------------ CONFIG ------------------
-with open("config.yaml", encoding="utf-8") as f:
-    config = yaml.safe_load(f)
-
-LEAPS_TOP_N = config.get("leaps_top_n", 50)
-MIN_PRICE = config.get("leaps_min_price", 5)
+LEAPS_TOP_N = 50         # top N tickers saved to leapstickers.txt
+TOP_ALERTS = 5           # number of candidates to send Telegram alerts for
+MIN_PRICE = 5
+FIGSIZE = [12,6]
+BG_COLOR = "black"
+CURRENT_COLOR = "magenta"
+STRIKE_COLOR = "cyan"
 LEAPS_OUTPUT_FILE = "leapstickers.txt"
 
 # ------------------ SECRETS ------------------
@@ -52,11 +53,6 @@ def send_telegram_photo(buf, caption):
     )
 
 # ------------------ PLOTTING ------------------
-FIGSIZE = config.get("figsize", [12,6])
-BG_COLOR = config.get("background_color","black")
-CURRENT_COLOR = config.get("current_price_color","magenta")
-STRIKE_COLOR = config.get("strike_color","cyan")
-
 def plot_stock_with_strike(df, current_price, strike_price):
     fig, ax = plt.subplots(figsize=FIGSIZE)
     fig.patch.set_facecolor(BG_COLOR)
@@ -75,7 +71,7 @@ def plot_stock_with_strike(df, current_price, strike_price):
     plt.close()
     return buf
 
-# ------------------ STEP 1: FETCH NASDAQ + NYSE LISTINGS ------------------
+# ------------------ FETCH NASDAQ + NYSE TICKERS ------------------
 def fetch_all_tickers():
     nasdaq_url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt"
     nyse_url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/otherlisted.txt"
@@ -105,7 +101,7 @@ print(f"Total tickers fetched: {len(all_tickers)}")
 optionable_tickers = [t for t in all_tickers if is_optionable(t)]
 print(f"Optionable tickers found: {len(optionable_tickers)}")
 
-# ------------------ STEP 2: FILTER & SCORE ------------------
+# ------------------ FILTER & SCORE ------------------
 today = datetime.now().date()
 candidates = []
 
@@ -148,16 +144,18 @@ for t in optionable_tickers:
 candidates.sort(key=lambda x: x['Score'], reverse=True)
 top_candidates = candidates[:LEAPS_TOP_N]
 
+# Save top N to file
 with open(LEAPS_OUTPUT_FILE, "w") as f:
     for c in top_candidates:
         f.write(c["Ticker"] + "\n")
 
-print(f"Saved top {len(top_candidates)} LEAPS candidates to {LEAPS_OUTPUT_FILE}")
+# Only send alerts for top setups
+alerts_candidates = top_candidates[:TOP_ALERTS]
 
-# ------------------ STEP 3: RUN LEAPS ALERTS ------------------
+# ------------------ LOGIN & SEND ALERTS ------------------
 r.login(USERNAME, PASSWORD)
 
-for candidate in top_candidates:
+for candidate in alerts_candidates:
     ticker_raw = candidate['Ticker']
     ticker_clean = candidate['Ticker']
 
