@@ -11,6 +11,7 @@ import matplotlib.dates as mdates
 import io
 from datetime import datetime, timedelta
 import yfinance as yf
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 def ensure_package(pkg_name):
@@ -23,14 +24,15 @@ for pkg in ["pandas","numpy","matplotlib","requests","robin_stocks","yfinance"]:
     ensure_package(pkg)
 
 # ------------------ CONFIG ------------------
-LEAPS_TOP_N = 50         # top N tickers saved to leapstickers.txt
-TOP_ALERTS = 5           # number of candidates to send Telegram alerts for
-MIN_PRICE = 5
+LEAPS_TOP_N = 50          # number of top candidates to save
+TOP_ALERTS = 5            # number of best setups to alert
+MIN_PRICE = 5             # min stock price
 FIGSIZE = [12,6]
 BG_COLOR = "black"
 CURRENT_COLOR = "magenta"
 STRIKE_COLOR = "cyan"
 LEAPS_OUTPUT_FILE = "leapstickers.txt"
+MAX_WORKERS = 20          # number of parallel threads
 
 # ------------------ SECRETS ------------------
 USERNAME = os.environ["RH_USERNAME"]
@@ -71,7 +73,7 @@ def plot_stock_with_strike(df, current_price, strike_price):
     plt.close()
     return buf
 
-# ------------------ FETCH NASDAQ + NYSE TICKERS ------------------
+# ------------------ STEP 1: FETCH NASDAQ + NYSE LISTINGS ------------------
 def fetch_all_tickers():
     nasdaq_url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt"
     nyse_url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/otherlisted.txt"
@@ -86,39 +88,24 @@ def fetch_all_tickers():
     all_tickers = [t.strip().upper() for t in all_tickers if t.strip() != ""]
     return all_tickers
 
-def is_optionable(ticker):
+# ------------------ STEP 2: CHECK OPTIONABLE & SCORE ------------------
+def process_ticker(ticker):
     try:
         t = yf.Ticker(ticker)
-        return len(t.options) > 0
-    except:
-        return False
+        if len(t.options) == 0:
+            return None
 
-print("Fetching NASDAQ + NYSE tickers...")
-all_tickers = fetch_all_tickers()
-print(f"Total tickers fetched: {len(all_tickers)}")
-
-# Filter only optionable tickers
-optionable_tickers = [t for t in all_tickers if is_optionable(t)]
-print(f"Optionable tickers found: {len(optionable_tickers)}")
-
-# ------------------ FILTER & SCORE ------------------
-today = datetime.now().date()
-candidates = []
-
-for t in optionable_tickers:
-    try:
-        stock = yf.Ticker(t)
-        hist = stock.history(period="1y")['Close']
+        hist = t.history(period="1y")['Close']
         if hist.empty or len(hist) < 200:
-            continue
+            return None
 
         current_price = hist[-1]
         if current_price < MIN_PRICE:
-            continue
+            return None
 
         sma_50 = hist.rolling(50).mean().iloc[-1]
         sma_200 = hist.rolling(200).mean().iloc[-1]
-        earnings_growth = stock.info.get('earningsQuarterlyGrowth') or 0
+        earnings_growth = t.info.get('earningsQuarterlyGrowth') or 0
 
         reasons = []
         score = 0
@@ -136,10 +123,22 @@ for t in optionable_tickers:
         score += min(avg_vol/1e6, 2)
 
         if score > 0:
-            candidates.append({"Ticker": t, "Score": score, "Reasons": reasons})
+            return {"Ticker": ticker, "Score": score, "Reasons": reasons}
+        return None
+    except:
+        return None
 
-    except Exception:
-        continue
+print("Fetching NASDAQ + NYSE tickers...")
+all_tickers = fetch_all_tickers()
+print(f"Total tickers fetched: {len(all_tickers)}")
+
+candidates = []
+with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    futures = {executor.submit(process_ticker, t): t for t in all_tickers}
+    for future in as_completed(futures):
+        result = future.result()
+        if result:
+            candidates.append(result)
 
 candidates.sort(key=lambda x: x['Score'], reverse=True)
 top_candidates = candidates[:LEAPS_TOP_N]
@@ -149,11 +148,14 @@ with open(LEAPS_OUTPUT_FILE, "w") as f:
     for c in top_candidates:
         f.write(c["Ticker"] + "\n")
 
-# Only send alerts for top setups
+# ------------------ STEP 3: SEND TELEGRAM ALERTS ------------------
 alerts_candidates = top_candidates[:TOP_ALERTS]
 
-# ------------------ LOGIN & SEND ALERTS ------------------
 r.login(USERNAME, PASSWORD)
+summary = f"📊 LEAPS Scan Complete\nTotal optionable tickers scanned: {len(candidates)}\nTop candidates alerted: {len(alerts_candidates)}"
+send_telegram_message(summary)
+
+today = datetime.now().date()
 
 for candidate in alerts_candidates:
     ticker_raw = candidate['Ticker']
