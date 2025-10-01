@@ -16,17 +16,27 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Cache pip packages
+      - name: Cache installed site-packages
+        id: pip-cache
         uses: actions/cache@v3
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/robinhood_sell_puts.py') }}
+          path: |
+            ~/.local/lib/python3.11/site-packages
+            ~/.cache/pip
+          key: ${{ runner.os }}-python3.11-packages-${{ hashFiles('**/robinhood_sell_puts.py') }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-python3.11-packages-
 
-      - name: Install common dependencies
+      - name: Install dependencies (if cache miss)
+        if: steps.pip-cache.outputs.cache-hit != 'true'
         run: |
-          pip install robin_stocks pandas matplotlib numpy scipy requests lxml yfinance
+          pip install --upgrade pip
+          pip install robin_stocks==3.4.0 \
+                      pandas==2.3.3 \
+                      matplotlib==3.10.6 \
+                      numpy==2.3.3 \
+                      requests==2.32.5 \
+                      yfinance==0.2.66
 
       - name: Run Robinhood Sell Puts Scanner
         env:
