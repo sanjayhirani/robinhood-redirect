@@ -24,6 +24,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
+      - name: Install common dependencies
+        run: |
+          pip install robin_stocks pandas matplotlib numpy scipy requests lxml yfinance
+
       - name: Run Robinhood Sell Puts Scanner
         env:
           RH_USERNAME: ${{ secrets.RH_USERNAME }}
