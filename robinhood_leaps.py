@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pickle
+import time
+import functools
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 def ensure_package(pkg_name):
@@ -25,15 +27,15 @@ for pkg in ["pandas","numpy","matplotlib","requests","robin_stocks","yfinance"]:
     ensure_package(pkg)
 
 # ------------------ CONFIG ------------------
-LEAPS_TOP_N = 50          # number of top candidates to save
-TOP_ALERTS = 5            # number of best setups to alert
-MIN_PRICE = 5             # min stock price
+LEAPS_TOP_N = 20          # reduced from 50
+TOP_ALERTS = 5
+MIN_PRICE = 5
 FIGSIZE = [12,6]
 BG_COLOR = "black"
 CURRENT_COLOR = "magenta"
 STRIKE_COLOR = "cyan"
 LEAPS_OUTPUT_FILE = "leapstickers.txt"
-MAX_WORKERS = 20          # number of parallel threads
+MAX_WORKERS = 20
 CACHE_DIR = ".cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -76,7 +78,30 @@ def plot_stock_with_strike(df, current_price, strike_price):
     plt.close()
     return buf
 
-# ------------------ STEP 1: FETCH NASDAQ + NYSE LISTINGS ------------------
+# ------------------ RETRY DECORATOR FOR RATE LIMIT ------------------
+def retry_on_rate_limit(max_retries=3, wait_sec=5):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            retries = 0
+            while retries < max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if "Too many requests" in str(e):
+                        retries += 1
+                        time.sleep(wait_sec)
+                    else:
+                        raise
+            raise Exception("Max retries exceeded for rate-limited request")
+        return wrapper
+    return decorator
+
+@retry_on_rate_limit()
+def get_option_market_data(opt_id):
+    return r.options.get_option_market_data_by_id(opt_id)
+
+# ------------------ FETCH NASDAQ + NYSE TICKERS ------------------
 def fetch_all_tickers():
     nasdaq_url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/nasdaqlisted.txt"
     nyse_url = "ftp://ftp.nasdaqtrader.com/SymbolDirectory/otherlisted.txt"
@@ -88,18 +113,16 @@ def fetch_all_tickers():
     nyse_tickers = nyse_df['ACT Symbol'].astype(str).tolist()
 
     all_tickers = list(set(nasdaq_tickers + nyse_tickers))
-    # filter out empty or NaN-like entries
-    all_tickers = [str(t).strip().upper() for t in all_tickers if str(t).strip() not in ("", "nan", "NaN")]
+    all_tickers = [str(t).strip().upper() for t in all_tickers if str(t).strip().upper() not in ("", "NAN")]
     return all_tickers
 
-# ------------------ STEP 2: CHECK OPTIONABLE & SCORE ------------------
+# ------------------ CHECK OPTIONABLE & SCORE ------------------
 def process_ticker(ticker):
     try:
         t = yf.Ticker(ticker)
         if len(t.options) == 0:
             return None
 
-        # Load cached 1y history
         cache_file = os.path.join(CACHE_DIR, f"{ticker}_1y.pkl")
         if os.path.exists(cache_file):
             with open(cache_file, "rb") as f:
@@ -113,7 +136,7 @@ def process_ticker(ticker):
         if hist.empty or len(hist) < 200:
             return None
 
-        current_price = hist[-1]
+        current_price = hist.iloc[-1]
         if current_price < MIN_PRICE:
             return None
 
@@ -133,7 +156,7 @@ def process_ticker(ticker):
             reasons.append(f"✅ Positive earnings growth: {earnings_growth*100:.1f}%")
             score += 2
 
-        avg_vol = hist[-63:].mean() if len(hist) >= 63 else hist.mean()
+        avg_vol = hist.iloc[-63:].mean() if len(hist) >= 63 else hist.mean()
         score += min(avg_vol/1e6, 2)
 
         if score > 0:
@@ -157,12 +180,11 @@ with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
 candidates.sort(key=lambda x: x['Score'], reverse=True)
 top_candidates = candidates[:LEAPS_TOP_N]
 
-# Save top N to file
 with open(LEAPS_OUTPUT_FILE, "w") as f:
     for c in top_candidates:
         f.write(c["Ticker"] + "\n")
 
-# ------------------ STEP 3: SEND TELEGRAM ALERTS ------------------
+# ------------------ TELEGRAM ALERTS ------------------
 alerts_candidates = top_candidates[:TOP_ALERTS]
 
 r.login(USERNAME, PASSWORD)
@@ -177,8 +199,7 @@ for candidate in alerts_candidates:
 
     try:
         stock = yf.Ticker(ticker_clean)
-        # Cached 1d current price
-        current_price = float(stock.history(period='1d')['Close'][-1])
+        current_price = float(stock.history(period='1d')['Close'].iloc[-1])
 
         all_options = r.options.find_tradable_options(ticker_clean, optionType="call")
         leaps_options = [opt for opt in all_options if datetime.strptime(opt['expiration_date'], "%Y-%m-%d").date() >= today + timedelta(days=365)]
@@ -189,7 +210,7 @@ for candidate in alerts_candidates:
         best_score = -1
         for opt in leaps_options:
             strike = float(opt['strike_price'])
-            md = r.options.get_option_market_data_by_id(opt['id'])[0]
+            md = get_option_market_data(opt['id'])[0]
             bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
             open_interest = int(md.get('open_interest') or 0)
             volume = int(md.get('volume') or 0)
@@ -213,7 +234,6 @@ for candidate in alerts_candidates:
                 }
 
         if best_option:
-            # Cached 6mo history
             cache_file_6mo = os.path.join(CACHE_DIR, f"{ticker_clean}_6mo.pkl")
             if os.path.exists(cache_file_6mo):
                 with open(cache_file_6mo, "rb") as f:
@@ -238,3 +258,6 @@ for candidate in alerts_candidates:
 
     except Exception as e:
         send_telegram_message(f"{ticker_raw} error: {e}")
+
+    # Avoid rate limit
+    time.sleep(1.5)
