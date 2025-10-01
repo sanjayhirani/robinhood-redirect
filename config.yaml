@@ -1,0 +1,17 @@
+# config.yaml - Robinhood Sell Puts Scanner Configuration
+
+tickers_file: tickers.txt  # Text file with one ticker per line
+
+# General settings
+num_expirations: 3        # How many upcoming option expiration dates to check
+min_price: 0.10           # Minimum bid price for options
+hv_period: 21             # Historical volatility lookback period
+candle_width: 0.6         # Width of candlesticks in plots
+low_days: 14              # Number of days to calculate recent low
+expiry_limit_days: 21     # Max days until expiration for options
+
+# Option filters
+option_filters:
+  min_bid_price: 0.10
+  min_distance_from_low: 0.01
+  max_selected_strikes: 3
