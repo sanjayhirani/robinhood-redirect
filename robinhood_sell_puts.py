@@ -1,7 +1,6 @@
 # robinhood_sell_puts.py
 
 import os
-import sys
 import subprocess
 import requests
 import robin_stocks.robinhood as r
@@ -15,13 +14,13 @@ from datetime import datetime, timedelta
 import yfinance as yf
 import re
 
-# ------------------ AUTO-INSTALL OPTIONAL DEPENDENCIES ------------------
+# ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 
 def ensure_package(pkg_name):
     try:
         __import__(pkg_name)
     except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg_name])
+        subprocess.check_call([os.sys.executable, "-m", "pip", "install", pkg_name])
 
 for pkg in ["pandas","numpy","matplotlib","requests","robin_stocks","yfinance","PyYAML"]:
     ensure_package(pkg)
@@ -38,7 +37,6 @@ if not os.path.exists(TICKERS_FILE):
     raise FileNotFoundError(f"{TICKERS_FILE} not found.")
 
 TICKERS_RAW = [line.strip() for line in open(TICKERS_FILE, encoding="utf-8") if line.strip()]
-# Clean tickers for API (alphanumeric only)
 TICKERS = [re.sub(r'[^A-Z0-9.-]', '', t.upper()) for t in TICKERS_RAW]
 
 # ------------------ SECRETS ------------------
@@ -118,10 +116,9 @@ def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_
 
 r.login(USERNAME, PASSWORD)
 today = datetime.now().date()
-expiry_limit_days = config.get("expiry_limit_days", 21)
-cutoff = today + timedelta(days=expiry_limit_days)
+cutoff = today + timedelta(days=config.get("expiry_limit_days", 21))
 
-# ------------------ SCAN TICKERS ------------------
+# ------------------ EARNINGS / DIVIDENDS CHECK ------------------
 
 safe_tickers = []
 risky_msgs = []
@@ -134,7 +131,6 @@ for ticker_raw, ticker_clean in zip(TICKERS_RAW, TICKERS):
         msg_parts = [f"{ticker_raw}"]
         has_event = False
 
-        # Dividend check
         try:
             future_divs = stock.dividends[stock.dividends.index.date >= today]
             if not future_divs.empty:
@@ -145,7 +141,6 @@ for ticker_raw, ticker_clean in zip(TICKERS_RAW, TICKERS):
         except:
             pass
 
-        # Earnings check
         try:
             earnings_dates = stock.get_earnings_dates(limit=2)
             if not earnings_dates.empty:
@@ -167,7 +162,6 @@ for ticker_raw, ticker_clean in zip(TICKERS_RAW, TICKERS):
         risky_msgs.append(f"{ticker_raw} error: {e}")
         risky_count += 1
 
-# Summary message
 summary_lines = []
 if risky_msgs:
     summary_lines.append(f"{config['telegram_labels']['risky_tickers']}\n" + "\n".join(risky_msgs))
@@ -178,6 +172,7 @@ summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {r
 send_telegram_message("\n".join(summary_lines))
 
 # ------------------ OPTIONS SCAN ------------------
+
 all_options = []
 candidate_scores = []
 
@@ -196,9 +191,91 @@ for ticker_raw, ticker_clean in safe_tickers:
         df = df.asfreq('B').ffill()
         last_14_low = df['low'][-config.get("low_days",14):].min()
 
+        # Find tradable puts
         all_puts = r.options.find_tradable_options(ticker_clean, optionType="put")
-        # ... Continue your existing option selection logic ...
-        # Use ticker_clean for API, ticker_raw for Telegram messages
+        exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))
+        exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff]
+        exp_dates = exp_dates[:config.get("num_expirations",3)]
+
+        candidate_puts = []
+        for exp_date in exp_dates:
+            puts_for_exp = [opt for opt in all_puts if opt['expiration_date']==exp_date]
+            strikes_below = sorted([float(opt['strike_price']) for opt in puts_for_exp if float(opt['strike_price']) < current_price], reverse=True)
+            chosen_strikes = strikes_below[1:4] if len(strikes_below)>1 else strikes_below
+            for opt in puts_for_exp:
+                strike = float(opt['strike_price'])
+                if strike not in chosen_strikes:
+                    continue
+                md = r.options.get_option_market_data_by_id(opt['id'])[0]
+                bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
+                if bid_price < config.get("min_price",0.10):
+                    continue
+                delta = float(md.get('delta') or 0.0)
+                cop_short = float(md.get('chance_of_profit_short') or 0.0)
+                open_interest = int(md.get('open_interest') or 0)
+                volume = int(md.get('volume') or 0)
+                dist_from_low = (strike - last_14_low) / last_14_low
+                if dist_from_low < 0.01:
+                    continue
+                candidate_puts.append({
+                    "Ticker": ticker_raw,
+                    "TickerClean": ticker_clean,
+                    "Current Price": current_price,
+                    "Expiration Date": exp_date,
+                    "Strike Price": strike,
+                    "Bid Price": bid_price,
+                    "Delta": delta,
+                    "COP Short": cop_short,
+                    "Open Interest": open_interest,
+                    "Volume": volume
+                })
+
+        selected_puts = sorted(candidate_puts, key=lambda x:x['COP Short'], reverse=True)[:3]
+        all_options.extend(selected_puts)
+
+        if selected_puts:
+            msg_lines = [f"📊 {ticker_raw} current: ${current_price:.2f}"]
+            for idx, p in enumerate(selected_puts,1):
+                msg_lines.append(
+                    f"<b>Option {idx}:</b>\nExp: {p['Expiration Date']} | Strike: ${p['Strike Price']} | Bid: ${p['Bid Price']:.2f}\nDelta: {p['Delta']:.3f} | COP: {p['COP Short']*100:.1f}%\n────────────────────────────"
+                )
+            send_telegram_message("\n".join(msg_lines))
 
     except Exception as e:
         send_telegram_message(f"{ticker_raw} error: {e}")
+
+# ------------------ BEST PUT ALERT ------------------
+
+if all_options:
+    def score(opt):
+        days_to_exp = (datetime.strptime(opt['Expiration Date'], "%Y-%m-%d").date() - today).days
+        if days_to_exp <=0:
+            return 0
+        liquidity = 1 + 0.5*(opt['Volume']+opt['Open Interest'])/1000
+        max_contracts = max(1, int(buying_power // (opt['Strike Price']*100)))
+        return opt['Bid Price']*100*max_contracts*opt['COP Short']*liquidity/days_to_exp
+
+    best = max(all_options, key=score)
+    max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
+    total_premium = best['Bid Price']*100*max_contracts
+
+    historicals = r.stocks.get_stock_historicals(best['TickerClean'], interval='day', span='month', bounds='regular')
+    df = pd.DataFrame(historicals)
+    df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
+    df.set_index('begins_at', inplace=True)
+    df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
+    df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
+    df = df.asfreq('B').ffill()
+    last_14_low = df['low'][-config.get("low_days",14):].min()
+    buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
+
+    msg_lines = [
+        "🔥 <b>Best Cash-Secured Put</b>",
+        f"📊 {best['Ticker']} current: ${best['Current Price']:.2f}",
+        f"✅ Expiration: {best['Expiration Date']}",
+        f"💲 Strike: {best['Strike Price']}",
+        f"💰 Bid: ${best['Bid Price']:.2f}",
+        f"🔺 Delta: {best['Delta']:.3f} | COP: {best['COP Short']*100:.1f}%",
+        f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}"
+    ]
+    send_telegram_photo(buf, "\n".join(msg_lines))
