@@ -1,0 +1,48 @@
+name: Robinhood Sell Puts Scanner
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 15 * * 1'  # every Monday at 11:30 AM ET
+
+jobs:
+  run-scanner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Cache installed site-packages
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.local/lib/python3.11/site-packages
+            ~/.cache/pip
+          key: ${{ runner.os }}-python3.11-packages-${{ hashFiles('**/robinhood_sell_puts.py','**/config.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-python3.11-packages-
+
+      - name: Install dependencies (fixed PyYAML)
+        run: |
+          python -m pip install --upgrade pip
+          pip install robin_stocks==3.4.0 \
+                      pandas==2.3.3 \
+                      matplotlib==3.10.6 \
+                      numpy==2.3.3 \
+                      scipy==1.16.2 \
+                      requests==2.32.5 \
+                      lxml==6.0.2 \
+                      yfinance==0.2.66 \
+                      PyYAML==6.0.3
+
+      - name: Run Robinhood Sell Puts Scanner
+        env:
+          RH_USERNAME: ${{ secrets.RH_USERNAME }}
+          RH_PASSWORD: ${{ secrets.RH_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python robinhood_sell_puts.py
