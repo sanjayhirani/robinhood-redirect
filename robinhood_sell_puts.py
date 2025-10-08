@@ -286,41 +286,33 @@ if all_options:
 # ------------------ TOP 10 SUMMARY ALERT ------------------
 
 if all_options:
-    # Gather all top 3 options per top 10 tickers
-    summary_candidates = []
+    summary_rows = []
+    top10_best_options = []
+
+    # Loop through each top ticker and find its single best option
     for t in top_ticker_names:
         puts_for_ticker = [opt for opt in all_options if opt['Ticker'] == t]
-        top3 = sorted(puts_for_ticker, key=lambda x: x['COP Short'], reverse=True)[:3]
-        for p in top3:
-            max_contracts = max(1, int(buying_power // (p['Strike Price'] * 100)))
-            total_premium = p['Bid Price'] * 100 * max_contracts
-            summary_candidates.append({
-                **p,
-                'Max Contracts': max_contracts,
-                'Total Premium': total_premium
-            })
+        if not puts_for_ticker:
+            continue
+        best_for_ticker = max(puts_for_ticker, key=lambda x: x['COP Short'])
+        max_contracts = max(1, int(buying_power // (best_for_ticker['Strike Price'] * 100)))
+        total_premium = best_for_ticker['Bid Price'] * 100 * max_contracts
+        best_for_ticker['Max Contracts'] = max_contracts
+        best_for_ticker['Total Premium'] = total_premium
+        top10_best_options.append(best_for_ticker)
 
-    # Pick the single best option across all top 10 tickers
-    def score(opt):
-        days_to_exp = (datetime.strptime(opt['Expiration Date'], "%Y-%m-%d").date() - today).days
-        if days_to_exp <= 0:
-            return 0
-        liquidity = 1 + 0.5 * (opt['Volume'] + opt['Open Interest']) / 1000
-        return opt['Bid Price'] * 100 * opt['Max Contracts'] * opt['COP Short'] * liquidity / days_to_exp
+        summary_rows.append(
+            f"{best_for_ticker['Ticker']:6} | {best_for_ticker['Expiration Date']} | "
+            f"{best_for_ticker['Strike Price']:>6.2f} | {best_for_ticker['Bid Price']:>5.2f} | "
+            f"{best_for_ticker['COP Short']*100:>5.1f}% | {max_contracts:>2}x | ${total_premium:>7.2f}"
+        )
 
-    best_of_top10 = max(summary_candidates, key=score)
+    # Create header + table
+    header = "<b>📋 Top 10 Summary — Best Option per Ticker</b>\n"
+    table_header = "Ticker | Exp Date | Strike | Bid | COP% | Cntr | Total Prem\n" + "-"*65
+    table_body = "\n".join(summary_rows)
 
-    # Format table-style Telegram message
-    table_msg = (
-        "📋 <b>Top 10 Summary Alert — Best Option</b>\n"
-        f"Ticker: {best_of_top10['Ticker']}\n"
-        f"Current: ${best_of_top10['Current Price']:.2f}\n"
-        f"Exp: {best_of_top10['Expiration Date']} | Strike: ${best_of_top10['Strike Price']}\n"
-        f"Bid: ${best_of_top10['Bid Price']:.2f} | Delta: {best_of_top10['Delta']:.3f} | COP: {best_of_top10['COP Short']*100:.1f}%\n"
-        f"Max Contracts: {best_of_top10['Max Contracts']} | Total Premium: ${best_of_top10['Total Premium']:.2f}"
-    )
-
-    send_telegram_message(table_msg)
+    send_telegram_message(header + "\n<pre>" + table_header + "\n" + table_body + "</pre>")
 
 # ------------------ BEST PUT ALERT ------------------
 
@@ -358,5 +350,6 @@ if all_options:
         f"💵 Available Buying Power: ${buying_power:.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
 
