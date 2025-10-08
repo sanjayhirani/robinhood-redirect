@@ -326,7 +326,7 @@ if all_options:
 try:
     positions = r.options.get_open_option_positions()
     if positions:
-        # Columns
+        # Columns for table
         cols = ["Ticker","Type","Strike","Exp","Qty","Current","Avg","Mark","OrigPnL","PnLNow"]
         rows_data = []
 
@@ -334,6 +334,7 @@ try:
             qty = int(float(pos.get("quantity",0)))
             if qty == 0:
                 continue
+
             instrument = r.helper.request_get(pos.get("option"))
             ticker = instrument['chain_symbol']
             opt_type = instrument['type'].upper()
@@ -344,35 +345,39 @@ try:
             avg_price = float(pos.get('average_price',0.0))
             mark_price = float(pos.get('mark_price',0.0))
 
-            # Per-contract PnL
-            orig_pnl = avg_price
-            pnl_now = avg_price - mark_price
+            # Total PnL per position
+            orig_pnl = (avg_price * 100 * qty)
+            pnl_now = ((mark_price - avg_price) * 100 * qty)
 
+            # Add row
             rows_data.append([
                 ticker,
                 opt_type,
-                f"{strike:.2f}",
-                exp_date,
-                str(qty),
-                f"${current_price:.2f}",
-                f"${avg_price:.2f}",
-                f"${mark_price:.2f}",
-                f"${orig_pnl:.2f}",
-                f"${pnl_now:.2f}"
+                strike,
+                exp_date[5:],  # MM-DD
+                qty,
+                current_price,
+                avg_price,
+                mark_price,
+                orig_pnl,
+                pnl_now
             ])
 
-        # Column widths based on formatted strings
-        col_widths = [max(len(col), max(len(row[i]) for row in rows_data)) for i, col in enumerate(cols)]
+        if rows_data:
+            # Fixed-width formatting to match top 10 summary
+            fmt_rows = []
+            for row in rows_data:
+                fmt_rows.append(
+                    f"{row[0]:<5}|{row[1]:<3}|{row[2]:<6.2f}|{row[3]:<5}|"
+                    f"{row[4]:<2}|${row[5]:<5.2f}|${row[6]:<5.2f}|${row[7]:<5.2f}|"
+                    f"${row[8]:<6.2f}|${row[9]:<6.2f}"
+                )
 
-        def format_row(row):
-            return "|" + "|".join(f"{val:<{col_widths[i]}}" for i,val in enumerate(row)) + "|"
+            # Header row aligned with data
+            header = "Ticker|Type|Strike|Exp  |Qty|Current|Avg  |Mark |OrigPnL|PnLNow\n" + "-"*65
+            table_text = "<b>📋 Current Open Positions</b>\n<pre>" + header + "\n" + "\n".join(fmt_rows) + "</pre>"
 
-        header_line = format_row(cols)
-        separator_line = "|" + "|".join("-"*w for w in col_widths) + "|"
-        formatted_rows = [format_row(r) for r in rows_data]
-        table_text = "\n".join([header_line, separator_line] + formatted_rows)
-
-        send_telegram_message(table_text)
+            send_telegram_message(table_text)
 
 except Exception as e:
     send_telegram_message(f"Error generating current positions table: {e}")
@@ -401,38 +406,37 @@ if all_options:
         return opt['Bid Price']*100*max_contracts*opt['COP Short']*liquidity/days_to_exp
 
     # --- Pick best option only from top 10 tickers ---
-    if top10_options:
-        best = max(top10_options, key=score)
-        max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
-        total_premium = best['Bid Price']*100*max_contracts
+if top10_best_options:  # reuse top10_best_options from summary
+    # --- Pick best option only from top10_best_options ---
+    best = max(top10_best_options, key=score)
+    max_contracts = best['Max Contracts']
+    total_premium = best['Total Premium']
 
-        historicals = r.stocks.get_stock_historicals(
-            best['TickerClean'], interval='day', span='month', bounds='regular'
-        )
-        df = pd.DataFrame(historicals)
-        df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
-        df.set_index('begins_at', inplace=True)
-        df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
-        df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
-        df = df.asfreq('B').ffill()
-        last_14_low = df['low'][-config.get("low_days",14):].min()
-        buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
+    historicals = r.stocks.get_stock_historicals(
+        best['TickerClean'], interval='day', span='month', bounds='regular'
+    )
+    df = pd.DataFrame(historicals)
+    df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
+    df.set_index('begins_at', inplace=True)
+    df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
+    df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
+    df = df.asfreq('B').ffill()
+    last_14_low = df['low'][-config.get("low_days",14):].min()
+    buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
 
-        # Deep link + web fallback
-        app_url = f"robinhood://options?symbol={best['TickerClean']}"
-        web_url = f"https://robinhood.com/options/chains/{best['TickerClean']}"
+    app_url = f"robinhood://options?symbol={best['TickerClean']}"
+    web_url = f"https://robinhood.com/options/chains/{best['TickerClean']}"
 
-        msg_lines = [
-            "🔥 <b>Best Cash-Secured Put</b>",
-            f"📊 {best['Ticker']} current: ${best['Current Price']:.2f}",
-            f"✅ Expiration: {best['Expiration Date']}",
-            f"💲 Strike: {best['Strike Price']:.2f}",
-            f"💰 Bid: ${best['Bid Price']:.2f}",
-            f"🔺 Delta: {best['Delta']:.3f} | COP: {best['COP Short']*100:.1f}%",
-            f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
-            f"💵 Buying Power: ${buying_power:,.2f}",
-            f"🔗 <a href='{app_url}'>Open in Robinhood App</a> (preferred)",
-            f"🌐 <a href='{web_url}'>Open in Browser</a> (fallback)"
-        ]
-        send_telegram_photo(buf, "\n".join(msg_lines))
-
+    msg_lines = [
+        "🔥 <b>Best Cash-Secured Put</b>",
+        f"📊 {best['Ticker']} current: ${best['Current Price']:.2f}",
+        f"✅ Expiration: {best['Expiration Date']}",
+        f"💲 Strike: ${best['Strike Price']:.2f}",
+        f"💰 Bid: ${best['Bid Price']:.2f}",
+        f"🔺 Delta: {best['Delta']:.3f} | COP: {best['COP Short']*100:.1f}%",
+        f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
+        f"💵 Buying Power: ${buying_power:,.2f}",
+        f"🔗 <a href='{app_url}'>Open in Robinhood App</a> (preferred)",
+        f"🌐 <a href='{web_url}'>Open in Browser</a> (fallback)"
+    ]
+    send_telegram_photo(buf, "\n".join(msg_lines))
