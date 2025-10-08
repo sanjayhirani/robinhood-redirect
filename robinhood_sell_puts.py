@@ -384,24 +384,21 @@ if positions:
 
         send_telegram_message("<pre>" + "\n".join(table_lines) + "</pre>")
 
-# ------------------ BEST PUT ALERT (restricted to top 10 summary options) ------------------
+# ------------------ BEST PUT ALERT ------------------
 
-if top10_best_options:  # use the best option per top 10 ticker
+if all_options:
     def score(opt):
         days_to_exp = (datetime.strptime(opt['Expiration Date'], "%Y-%m-%d").date() - today).days
-        if days_to_exp <= 0:
+        if days_to_exp <=0:
             return 0
-        liquidity = 1 + 0.5*(opt['Volume'] + opt['Open Interest']) / 1000
+        liquidity = 1 + 0.5*(opt['Volume']+opt['Open Interest'])/1000
         max_contracts = max(1, int(buying_power // (opt['Strike Price']*100)))
         return opt['Bid Price']*100*max_contracts*opt['COP Short']*liquidity/days_to_exp
 
-    # Pick the best among top 10 summary options only
-    best = max(top10_best_options, key=score)
+    best = max(all_options, key=score)
+    max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
+    total_premium = best['Bid Price']*100*max_contracts
 
-    max_contracts = best['Max Contracts']
-    total_premium = best['Total Premium']
-
-    # Prepare historicals for plotting
     historicals = r.stocks.get_stock_historicals(best['TickerClean'], interval='day', span='month', bounds='regular')
     df = pd.DataFrame(historicals)
     df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
@@ -412,8 +409,9 @@ if top10_best_options:  # use the best option per top 10 ticker
     last_14_low = df['low'][-config.get("low_days",14):].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
 
-    # Prepare and send Telegram alert
-    option_url = f"https://www.google.com/url?q=https://robinhood.com/options/chains/{best['TickerClean']}"
+    # Deep link to Robinhood app + fallback web link
+    app_url = f"robinhood://options?symbol={best['TickerClean']}"
+    web_url = f"https://robinhood.com/options/chains/{best['TickerClean']}"
 
     msg_lines = [
         "🔥 <b>Best Cash-Secured Put</b>",
@@ -424,9 +422,8 @@ if top10_best_options:  # use the best option per top 10 ticker
         f"🔺 Delta: {best['Delta']:.3f} | COP: {best['COP Short']*100:.1f}%",
         f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
         f"💵 Buying Power: ${buying_power:,.2f}",
-        f"🔗 <a href='{option_url}'>Open in Robinhood</a>"
+        f"🔗 <a href='{app_url}'>Open in Robinhood App</a> (preferred)",
+        f"🌐 <a href='{web_url}'>Open in Browser</a> (fallback)"
     ]
+
     send_telegram_photo(buf, "\n".join(msg_lines))
-
-
-
