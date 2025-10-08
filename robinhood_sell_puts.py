@@ -174,7 +174,6 @@ send_telegram_message("\n".join(summary_lines))
 # ------------------ OPTIONS SCAN ------------------
 
 all_options = []
-candidate_scores = []
 
 account_data = r.profiles.load_account_profile()
 buying_power = float(account_data['cash_available_for_withdrawal'])
@@ -231,18 +230,55 @@ for ticker_raw, ticker_clean in safe_tickers:
                 })
 
         selected_puts = sorted(candidate_puts, key=lambda x:x['COP Short'], reverse=True)[:3]
-        all_options.extend(selected_puts)
-
         if selected_puts:
-            msg_lines = [f"📊 {ticker_raw} current: ${current_price:.2f}"]
-            for idx, p in enumerate(selected_puts,1):
-                msg_lines.append(
-                    f"<b>Option {idx}:</b>\nExp: {p['Expiration Date']} | Strike: ${p['Strike Price']} | Bid: ${p['Bid Price']:.2f}\nDelta: {p['Delta']:.3f} | COP: {p['COP Short']*100:.1f}%\n────────────────────────────"
-                )
-            send_telegram_message("\n".join(msg_lines))
+            all_options.extend(selected_puts)
 
     except Exception as e:
         send_telegram_message(f"{ticker_raw} error: {e}")
+
+# ------------------ FILTER & SEND TOP 10 TICKERS ------------------
+
+if all_options:
+    def score(opt):
+        days_to_exp = (datetime.strptime(opt['Expiration Date'], "%Y-%m-%d").date() - today).days
+        if days_to_exp <= 0:
+            return 0
+        liquidity = 1 + 0.5 * (opt['Volume'] + opt['Open Interest']) / 1000
+        max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
+        return opt['Bid Price'] * 100 * max_contracts * opt['COP Short'] * liquidity / days_to_exp
+
+    # Compute best score per ticker
+    ticker_best = {}
+    for opt in all_options:
+        t = opt['Ticker']
+        sc = score(opt)
+        if t not in ticker_best or sc > ticker_best[t]['score'] or (
+            abs(sc - ticker_best[t]['score']) < 1e-6 and opt['COP Short'] > ticker_best[t]['COP Short']
+        ):
+            ticker_best[t] = {'score': sc, **opt}
+
+    # Sort and keep top 10 tickers
+    top_tickers = sorted(
+        ticker_best.values(),
+        key=lambda x: (x['score'], x['COP Short']),
+        reverse=True
+    )[:10]
+    top_ticker_names = {t['Ticker'] for t in top_tickers}
+
+    # Send Telegram messages only for top 10 tickers
+    for t in top_ticker_names:
+        puts_for_ticker = [opt for opt in all_options if opt['Ticker'] == t]
+        top3 = sorted(puts_for_ticker, key=lambda x: x['COP Short'], reverse=True)[:3]
+        if not top3:
+            continue
+        msg_lines = [f"📊 {t} current: ${top3[0]['Current Price']:.2f}"]
+        for idx, p in enumerate(top3, 1):
+            msg_lines.append(
+                f"<b>Option {idx}:</b>\nExp: {p['Expiration Date']} | Strike: ${p['Strike Price']} | "
+                f"Bid: ${p['Bid Price']:.2f}\nDelta: {p['Delta']:.3f} | COP: {p['COP Short']*100:.1f}%\n"
+                "────────────────────────────"
+            )
+        send_telegram_message("\n".join(msg_lines))
 
 # ------------------ BEST PUT ALERT ------------------
 
