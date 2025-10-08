@@ -409,7 +409,9 @@ if all_options:
     last_14_low = df['low'][-config.get("low_days",14):].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
 
-    # Prepare message content
+    # Deep link to Robinhood app + fallback web link
+    web_url = f"https://robinhood.com/options/chains/{best['TickerClean']}"
+
     msg_lines = [
         "🔥 <b>Best Cash-Secured Put</b>",
         f"📊 {best['Ticker']} current: ${best['Current Price']:.2f}",
@@ -418,12 +420,8 @@ if all_options:
         f"💰 Bid: ${best['Bid Price']:.2f}",
         f"🔺 Delta: {best['Delta']:.3f} | COP: {best['COP Short']*100:.1f}%",
         f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
-        f"💵 Buying Power: ${buying_power:,.2f}"
+        f"💵 Buying Power: ${buying_power:,.2f}",
+        f"🌐 <a href='{web_url}'>Open in Browser</a> (fallback)"
     ]
 
-    # Send chart photo first
     send_telegram_photo(buf, "\n".join(msg_lines))
-
-    # Then send clickable Robinhood app link as a separate message
-    app_url = f"robinhood://options?symbol={best['TickerClean']}"
-    send_telegram_message(f"🔗 <a href='{app_url}'>Open in Robinhood App</a>")
