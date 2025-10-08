@@ -333,13 +333,14 @@ try:
             if qty_raw == 0:
                 continue
 
-            contracts = abs(int(qty_raw))
-            is_short = qty_raw < 0
+            contracts = abs(int(qty_raw))           # positive number of contracts
+            is_short = qty_raw < 0                  # sold if negative
 
             instrument = r.helper.request_get(pos.get("option"))
-            ticker = instrument["chain_symbol"]
+            ticker = instrument.get("chain_symbol")
             inst_type = instrument.get("type", "").lower()
 
+            # human readable label
             if inst_type == "put":
                 opt_label = "📉 Sell Put"
             elif inst_type == "call":
@@ -347,33 +348,54 @@ try:
             else:
                 opt_label = inst_type.capitalize() or "Option"
 
-            strike = float(instrument["strike_price"])
-            exp_date = pd.to_datetime(instrument["expiration_date"]).strftime("%Y-%m-%d")
+            strike = float(instrument.get("strike_price"))
+            exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
 
-            current_price = float(r.stocks.get_latest_price(ticker)[0])
-            avg_price = float(pos.get("average_price", 0.0))
+            # Prices from position object (avg may be negative for sold)
+            avg_price_raw = float(pos.get("average_price") or 0.0)   # e.g. -13.00 or 13.00
+            avg_per_contract = abs(avg_price_raw)                   # display as positive $13.00
 
-            # Get current market price from market data endpoint
-            opt_id = instrument["id"]
-            md = r.options.get_option_market_data_by_id(opt_id)[0]
-            mark_price = float(md.get("mark_price") or 0.0)
+            # Get live market data (mark price)
+            inst_id = instrument.get("id")
+            try:
+                md = r.options.get_option_market_data_by_id(inst_id)[0]
+            except Exception:
+                md = {}
+            md_mark = float(md.get("mark_price") or 0.0)
 
-            # --- Correct PnL calculations---
-            if is_short:
-                # You sold the option (credit received)
-                orig_pnl = avg_price * contracts
-                pnl_now = (avg_price - mark_price) * contracts
+            # If market-data mark is a small number (<1), assume it's per-share and scale to per-contract
+            if md_mark >= 1.0:
+                mark_per_contract = md_mark
             else:
-                # You bought the option (debit paid)
-                orig_pnl = -avg_price * contracts
-                pnl_now = (mark_price - avg_price) * contracts
+                mark_per_contract = md_mark * 100.0
+
+            # Fallback: if md_mark is zero/empty, try the position's mark_price (some endpoints include it)
+            if mark_per_contract == 0.0:
+                pos_mark = float(pos.get("mark_price") or 0.0)
+                # pos_mark might already be per-contract or per-share — try reasonable guess:
+                if pos_mark >= 1.0:
+                    mark_per_contract = pos_mark
+                else:
+                    mark_per_contract = pos_mark * 100.0
+
+            # --- PnL calculations (PER CONTRACT dollars) ---
+            if is_short:
+                # You received the premium (orig positive), profit if buyback is cheaper
+                orig_pnl = avg_per_contract * contracts
+                pnl_now = (avg_per_contract - mark_per_contract) * contracts
+            else:
+                # Long position (cost was paid)
+                orig_pnl = -avg_per_contract * contracts
+                pnl_now = (mark_per_contract - avg_per_contract) * contracts
 
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
 
+            # Build the message block (per-contract dollar values)
             msg_lines.append(
                 f"📌 <b>{ticker}</b> | {opt_label}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
-                f"Current Price: ${current_price:.2f}\n"
+                f"Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}\n"
+                f"Avg (per contract): ${avg_per_contract:.2f} | Mark (per contract): ${mark_per_contract:.2f}\n"
                 f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}\n"
                 "────────────────────"
             )
