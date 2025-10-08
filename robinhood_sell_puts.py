@@ -358,13 +358,13 @@ try:
             md = r.options.get_option_market_data_by_id(opt_id)[0]
             mark_price = float(md.get("mark_price") or 0.0)
 
-            # --- Correct PnL calculations with scale check ---
+            # --- Correct PnL calculations---
             if is_short:
-                # Short position: premium received, positive number
+                # You sold the option (credit received)
                 orig_pnl = avg_price * contracts
                 pnl_now = (avg_price - mark_price) * contracts
             else:
-                # Long position: premium paid, negative number
+                # You bought the option (debit paid)
                 orig_pnl = -avg_price * contracts
                 pnl_now = (mark_price - avg_price) * contracts
 
