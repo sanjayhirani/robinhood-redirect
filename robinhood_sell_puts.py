@@ -322,61 +322,52 @@ if all_options:
     table_body = "\n".join(summary_rows)
     send_telegram_message(header + "\n<pre>" + table_header + "\n" + table_body + "</pre>")
 
-# ------------------ CURRENT OPEN POSITIONS TABLE ------------------
+# ------------------ CURRENT OPEN POSITIONS ALERT (ENHANCED FORMAT WITH PNL COLORS) ------------------
 try:
     positions = r.options.get_open_option_positions()
     if positions:
-        # Columns to display
-        cols = ["Tkr","Type","Strike","Exp","Qty","Curr","OrigPnL","PnLNow"]
-        rows_data = []
-
+        msg_lines = ["📋 <b>Current Open Positions</b>\n"]
         for pos in positions:
-            qty = int(float(pos.get("quantity",0)))
+            qty = int(float(pos.get("quantity", 0)))
             if qty == 0:
                 continue
+
             instrument = r.helper.request_get(pos.get("option"))
             ticker = instrument['chain_symbol']
-            opt_type = instrument['type'].upper()
+            opt_type_raw = instrument['type'].upper()
+            if opt_type_raw == 'PUT':
+                opt_type = "📉 Sell Put"
+            else:
+                opt_type = "📈 Sell Call"
+
             strike = float(instrument['strike_price'])
-            exp_date = pd.to_datetime(instrument['expiration_date']).strftime('%m-%d')
+            exp_date = pd.to_datetime(instrument['expiration_date']).strftime('%Y-%m-%d')
 
             current_price = float(r.stocks.get_latest_price(ticker)[0])
-            mark_price = float(pos.get('mark_price',0.0))
-            avg_price = float(pos.get('average_price',0.0))
+            mark_price = float(pos.get('mark_price', 0.0))
+            avg_price = float(pos.get('average_price', 0.0))
 
-            # PnL calculations
+            # Correct PnL calculations in real dollars
             orig_pnl = avg_price * 100 * qty        # Premium received
-            pnl_now = (avg_price - mark_price) * 100 * qty  # Cash if closed now
+            pnl_now = (mark_price - avg_price) * 100 * qty  # Profit/Loss if closed now
 
-            rows_data.append([
-                ticker,
-                opt_type,
-                f"{strike:.2f}",
-                exp_date,
-                str(qty),
-                f"${current_price:.2f}",
-                f"${orig_pnl:.2f}",
-                f"${pnl_now:.2f}"
-            ])
+            # Color emoji for PnL
+            pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
 
-        if rows_data:
-            # Compute column widths based on data and header
-            col_widths = [max(len(col), max(len(row[i]) for row in rows_data)) for i, col in enumerate(cols)]
+            # Build each position block
+            msg_lines.append(
+                f"📌 <b>{ticker}</b> | {opt_type}\n"
+                f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {qty}\n"
+                f"Current Price: ${current_price:.2f}\n"
+                f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}\n"
+                "────────────────────"
+            )
 
-            def format_row(row):
-                # Last column without trailing pipe
-                return "|".join(f"{val:<{col_widths[i]}}" for i,val in enumerate(row))
-
-            header_line = format_row(cols)
-            separator_line = "-"*len(header_line)
-            formatted_rows = [format_row(r) for r in rows_data]
-            table_text = "\n".join([header_line, separator_line] + formatted_rows)
-
-            # Wrap table in <pre> and add <code> to shrink font
-            send_telegram_message("📋 Current Open Positions\n<pre><code>" + table_text + "</code></pre>")
+        # Send the whole message at once
+        send_telegram_message("\n".join(msg_lines))
 
 except Exception as e:
-    send_telegram_message(f"Error generating current positions table: {e}")
+    send_telegram_message(f"Error generating current positions alert: {e}")
 
 # ------------------ BEST PUT ALERT ------------------
 if top10_best_options:
@@ -401,7 +392,3 @@ if top10_best_options:
         f"💹 OrigPnL: ${orig_pnl:.2f} | PnLNow: ${pnl_now:.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
-
-
-
-
