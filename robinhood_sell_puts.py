@@ -322,7 +322,7 @@ if all_options:
     table_body = "\n".join(summary_rows)
     send_telegram_message(header + "\n<pre>" + table_header + "\n" + table_body + "</pre>")
 
-# ------------------ CURRENT OPEN OPTIONS POSITIONS ------------------
+# ------------------ CURRENT OPEN OPTIONS POSITIONS (Compact, Exact PnL) ------------------
 
 positions = r.options.get_open_option_positions()
 if positions:
@@ -338,7 +338,12 @@ if positions:
             strike_price = float(instrument['strike_price'])
             option_type = instrument['type'].upper()  # PUT or CALL
             expiration_date = instrument['expiration_date']
-            pnl = (float(pos.get('mark_price', 0.0)) - float(pos.get('average_price', 0.0))) * 100 * qty
+
+            avg_price = float(pos.get('average_price', 0.0))
+            mark_price = float(pos.get('mark_price', 0.0))  # current option price
+            profit_now = (avg_price - mark_price) * 100 * qty  # exact PnL if closed now
+            orig_profit = avg_price * 100 * qty  # original PnL if held to expiry
+
             current_price = float(r.stocks.get_latest_price(chain_symbol)[0])
 
             open_rows.append({
@@ -347,29 +352,32 @@ if positions:
                 "Strike": strike_price,
                 "Exp": expiration_date[5:],  # MM-DD
                 "Qty": qty,
-                "Current": current_price,
-                "PnL": pnl
+                "Curr": current_price,
+                "OrigPnL": orig_profit,
+                "PnLNow": profit_now
             })
         except Exception as e:
             print("Error parsing position:", e)
 
     if open_rows:
-        # Fixed widths
+        # Compact column widths
         col_widths = {
-            "Ticker": 5,
-            "Type": 4,
+            "Ticker": 4,
+            "Type": 3,
             "Strike": 6,
             "Exp": 5,
             "Qty": 3,
-            "Current": 6,
-            "PnL": 6
+            "Curr": 6,
+            "OrigPnL": 7,
+            "PnLNow": 7
         }
 
         # Header
         header = f"{'Tkr':<{col_widths['Ticker']}}|{'Typ':<{col_widths['Type']}}|" \
                  f"{'Strk':<{col_widths['Strike']}}|{'Exp':<{col_widths['Exp']}}|" \
-                 f"{'Qty':<{col_widths['Qty']}}|{'Curr':<{col_widths['Current']}}|{'PnL':<{col_widths['PnL']}}"
-        separator = "-".ljust(sum(col_widths.values()) + 6, "-")  # total width including pipes
+                 f"{'Qty':<{col_widths['Qty']}}|{'Curr':<{col_widths['Curr']}}|" \
+                 f"{'OrigPnL':<{col_widths['OrigPnL']}}|{'PnLNow':<{col_widths['PnLNow']}}"
+        separator = "-".ljust(sum(col_widths.values()) + 7, "-")  # total width including pipes
 
         table_lines = ["<b>📂 Current Open Options Positions</b>\n", header, separator]
 
@@ -378,8 +386,8 @@ if positions:
             table_lines.append(
                 f"{row['Ticker']:<{col_widths['Ticker']}}|{row['Type']:<{col_widths['Type']}}|"
                 f"{row['Strike']:<{col_widths['Strike']}.2f}|{row['Exp']:<{col_widths['Exp']}}|"
-                f"{row['Qty']:<{col_widths['Qty']}}|{row['Current']:<{col_widths['Current']}.2f}|"
-                f"{row['PnL']:<{col_widths['PnL']}.0f}"
+                f"{row['Qty']:<{col_widths['Qty']}}|{row['Curr']:<{col_widths['Curr']}.2f}|"
+                f"{row['OrigPnL']:<{col_widths['OrigPnL']}.2f}|{row['PnLNow']:<{col_widths['PnLNow']}.2f}"
             )
 
         send_telegram_message("<pre>" + "\n".join(table_lines) + "</pre>")
@@ -421,7 +429,7 @@ if all_options:
         f"🔺 Delta: {best['Delta']:.3f} | COP: {best['COP Short']*100:.1f}%",
         f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
         f"💵 Buying Power: ${buying_power:,.2f}",
-        f"🌐 <a href='{web_url}'>Open in Browser</a> (fallback)"
+        f"🌐 <a href='{web_url}'>Open in Browser</a>"
     ]
 
     send_telegram_photo(buf, "\n".join(msg_lines))
