@@ -322,54 +322,66 @@ if all_options:
     table_body = "\n".join(summary_rows)
     send_telegram_message(header + "\n<pre>" + table_header + "\n" + table_body + "</pre>")
 
-# ------------------ CURRENT OPEN POSITIONS ALERT (FIXED PNL, ONE MESSAGE) ------------------
+# ------------------ CURRENT OPEN POSITIONS ALERT (ROBUST, CORRECT PNL) ------------------
 try:
     positions = r.options.get_open_option_positions()
     if positions:
-        msg_lines = ["📋 <b>Current Open Positions</b>"]
+        msg_lines = ["📋 <b>Current Open Positions</b>\n"]
 
         for pos in positions:
-            qty = int(float(pos.get("quantity", 0)))
-            if qty == 0:
+            # raw qty may be negative for short positions
+            qty_raw = float(pos.get("quantity", 0))
+            if qty_raw == 0:
                 continue
+
+            contracts = abs(int(qty_raw))            # number of contracts (positive)
+            is_short = qty_raw < 0                   # True if sold (short) position
 
             instrument = r.helper.request_get(pos.get("option"))
             ticker = instrument["chain_symbol"]
-            opt_type = instrument["type"].lower()
+            inst_type = instrument.get("type", "").lower()
+
+            # human label
+            if inst_type == "put":
+                opt_label = "📉 Sell Put"
+            elif inst_type == "call":
+                opt_label = "📈 Sell Call"
+            else:
+                opt_label = inst_type.capitalize() or "Option"
+
             strike = float(instrument["strike_price"])
             exp_date = pd.to_datetime(instrument["expiration_date"]).strftime("%Y-%m-%d")
 
             current_price = float(r.stocks.get_latest_price(ticker)[0])
-            avg_price = float(pos.get("average_price", 0.0))
-            mark_price = float(pos.get("mark_price", 0.0))
+            avg_price = float(pos.get("average_price", 0.0))   # price per contract
+            mark_price = float(pos.get("mark_price", 0.0))     # current market price per contract
 
-            # --- PnL calculations ---
-            orig_pnl = avg_price * 100 * qty  # Premium received (always positive)
-            pnl_now = (avg_price - mark_price) * 100 * qty  # Realized + unrealized PnL
-
-            # Determine option type label
-            if opt_type == "put":
-                opt_label = "Sell Put"
-            elif opt_type == "call":
-                opt_label = "Sell Call"
+            # ------------------ CORRECT PNL LOGIC ------------------
+            if is_short:
+                # short: premium received (positive)
+                orig_pnl = avg_price * contracts
+                # profit if buy back now = premium_received - cost_to_buyback
+                pnl_now = (avg_price - mark_price) * contracts
             else:
-                opt_label = opt_type.capitalize()
+                # long: cost paid (negative orig_pnl)
+                orig_pnl = -avg_price * contracts
+                pnl_now = (mark_price - avg_price) * contracts
 
-            # Color-coded PnL emoji
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
 
+            # Build each position block (keeps full decimals)
             msg_lines.append(
-                f"\n📌 <b>{ticker}</b> | {opt_label}\n"
-                f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {qty}\n"
+                f"📌 <b>{ticker}</b> | {opt_label}\n"
+                f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
                 f"Current Price: ${current_price:.2f}\n"
-                f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${abs(pnl_now):.2f}\n"
+                f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}\n"
                 "────────────────────"
             )
 
         send_telegram_message("\n".join(msg_lines))
 
 except Exception as e:
-    send_telegram_message(f"Error generating current positions: {e}")
+    send_telegram_message(f"Error generating current positions alert: {e}")
 
 # ------------------ BEST PUT ALERT ------------------
 if top10_best_options:
