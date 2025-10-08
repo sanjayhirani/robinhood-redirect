@@ -350,19 +350,21 @@ try:
             else:
                 opt_label = inst_type.capitalize() or "Option"
 
-            # Average price per contract (signed)
+            # PnL calculations using md_mark_price
             avg_price_raw = float(pos.get("average_price") or 0.0)
-
-            # Robinhood actual market value for the position
-            market_value = float(pos.get("market_value") or 0.0)
-
-            # --- PnL calculations using Robinhood market_value ---
+            contracts = abs(int(qty_raw))
+            is_short = qty_raw < 0
+            
+            # Live mark price from market data
+            md_mark_price = float(md.get("mark_price") or 0.0)
+            mark_per_contract = md_mark_price * 100  # convert per-share to per-contract
+            
             if is_short:
                 orig_pnl = abs(avg_price_raw) * contracts
-                pnl_now = orig_pnl - market_value
+                pnl_now = orig_pnl - (mark_per_contract * contracts)
             else:
                 orig_pnl = -abs(avg_price_raw) * contracts
-                pnl_now = market_value + orig_pnl
+                pnl_now = (mark_per_contract * contracts) + orig_pnl
 
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
 
@@ -404,3 +406,4 @@ if top10_best_options:
         f"💹 OrigPnL: ${orig_pnl:.2f} | PnLNow: ${pnl_now:.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
