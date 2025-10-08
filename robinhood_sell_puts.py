@@ -322,6 +322,54 @@ if all_options:
     table_body = "\n".join(summary_rows)
     send_telegram_message(header + "\n<pre>" + table_header + "\n" + table_body + "</pre>")
 
+
+# ------------------ CURRENT OPEN OPTIONS POSITIONS ------------------
+
+positions = r.options.get_open_option_positions()
+if positions:
+    open_rows = []
+    for pos in positions:
+        try:
+            qty = int(float(pos.get('quantity', 0)))
+            if qty == 0:
+                continue
+            instrument_url = pos.get('option')
+            instrument = r.helper.request_get(instrument_url)
+            chain_symbol = instrument['chain_symbol']
+            strike_price = float(instrument['strike_price'])
+            option_type = instrument['type'].upper()  # PUT or CALL
+            expiration_date = instrument['expiration_date']
+            avg_price = float(pos.get('average_price', 0.0))
+            mark_price = float(pos.get('mark_price', 0.0))
+            pnl = (mark_price - avg_price) * 100 * qty
+
+            open_rows.append({
+                "Ticker": chain_symbol,
+                "Type": option_type,
+                "Strike": strike_price,
+                "Exp": expiration_date[5:],  # MM-DD
+                "Qty": qty,
+                "Avg": avg_price,
+                "Mark": mark_price,
+                "PnL": pnl
+            })
+        except Exception as e:
+            print("Error parsing position:", e)
+
+    if open_rows:
+        # Format for mobile-friendly table (pipe-delimited, fixed width)
+        table_lines = ["<b>📂 Current Open Options Positions</b>\n"]
+        header = f"{'Tkr':<5}|{'Typ':<4}|{'Strk':<6}|{'Exp':<5}|{'Qty':<3}|{'Avg':<5}|{'Mark':<5}|{'PnL':<6}\n" + "-"*45
+        table_lines.append(header)
+
+        for row in open_rows:
+            table_lines.append(
+                f"{row['Ticker']:<5}|{row['Type']:<4}|{row['Strike']:<6.2f}|{row['Exp']:<5}|"
+                f"{row['Qty']:<3}|{row['Avg']:<5.2f}|{row['Mark']:<5.2f}|{row['PnL']:<+6.0f}"
+            )
+
+        send_telegram_message("<pre>" + "\n".join(table_lines) + "</pre>")
+
 # ------------------ BEST PUT ALERT (restricted to top 10 summary options) ------------------
 
 if top10_best_options:  # use the best option per top 10 ticker
@@ -365,4 +413,5 @@ if top10_best_options:  # use the best option per top 10 ticker
         f"🔗 <a href='{option_url}'>Open in Robinhood</a>"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
