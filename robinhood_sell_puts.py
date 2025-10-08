@@ -273,9 +273,12 @@ if all_options:
             continue
         msg_lines = [f"📊 {t} current: ${top3[0]['Current Price']:.2f}"]
         for idx, p in enumerate(top3, 1):
+            max_contracts = max(1, int(buying_power // (p['Strike Price'] * 100)))
+            total_premium = p['Bid Price'] * 100 * max_contracts
             msg_lines.append(
                 f"<b>Option {idx}:</b>\nExp: {p['Expiration Date']} | Strike: ${p['Strike Price']} | "
                 f"Bid: ${p['Bid Price']:.2f}\nDelta: {p['Delta']:.3f} | COP: {p['COP Short']*100:.1f}%\n"
+                f"Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}\n"
                 "────────────────────────────"
             )
         send_telegram_message("\n".join(msg_lines))
