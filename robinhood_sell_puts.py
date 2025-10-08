@@ -353,25 +353,20 @@ try:
             current_price = float(r.stocks.get_latest_price(ticker)[0])
             avg_price = float(pos.get("average_price", 0.0))
 
-            # ✅ NEW: always get current market price from market data endpoint
+            # Get current market price from market data endpoint
             opt_id = instrument["id"]
             md = r.options.get_option_market_data_by_id(opt_id)[0]
             mark_price = float(md.get("mark_price") or 0.0)
 
             # --- Correct PnL calculations with scale check ---
-            scale = 1
-            # If price values look like dollars per contract (e.g. > 10), don’t scale again
-            if avg_price > 5:  # simple heuristic; option prices rarely exceed $5/share
-                scale = 1
-            else:
-                scale = 100
-            
             if is_short:
-                orig_pnl = avg_price * scale * contracts
-                pnl_now = (avg_price - mark_price) * scale * contracts
+                # Short position: premium received, positive number
+                orig_pnl = avg_price * contracts
+                pnl_now = (avg_price - mark_price) * contracts
             else:
-                orig_pnl = -avg_price * scale * contracts
-                pnl_now = (mark_price - avg_price) * scale * contracts
+                # Long position: premium paid, negative number
+                orig_pnl = -avg_price * contracts
+                pnl_now = (mark_price - avg_price) * contracts
 
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
 
