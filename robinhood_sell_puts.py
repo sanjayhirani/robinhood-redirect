@@ -315,6 +315,8 @@ if all_options:
         f"💲 Strike: {best['Strike Price']}",
         f"💰 Bid: ${best['Bid Price']:.2f}",
         f"🔺 Delta: {best['Delta']:.3f} | COP: {best['COP Short']*100:.1f}%",
-        f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}"
+        f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
+        f"💵 Available Buying Power: ${buying_power:.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
