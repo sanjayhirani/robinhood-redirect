@@ -289,27 +289,31 @@ if all_options:
     summary_rows = []
     top10_best_options = []
 
-    # Loop through each top ticker and find its single best option
     for t in top_ticker_names:
         puts_for_ticker = [opt for opt in all_options if opt['Ticker'] == t]
         if not puts_for_ticker:
             continue
+
         best_for_ticker = max(puts_for_ticker, key=lambda x: x['COP Short'])
         max_contracts = max(1, int(buying_power // (best_for_ticker['Strike Price'] * 100)))
         total_premium = best_for_ticker['Bid Price'] * 100 * max_contracts
+
         best_for_ticker['Max Contracts'] = max_contracts
         best_for_ticker['Total Premium'] = total_premium
         top10_best_options.append(best_for_ticker)
 
+    top10_best_options = sorted(top10_best_options, key=lambda x: x['Total Premium'], reverse=True)
+
+    # Use tighter, shorter formatting so it fits on Telegram mobile
+    for opt in top10_best_options:
         summary_rows.append(
-            f"{best_for_ticker['Ticker']:6} | {best_for_ticker['Expiration Date']} | "
-            f"{best_for_ticker['Strike Price']:>6.2f} | {best_for_ticker['Bid Price']:>5.2f} | "
-            f"{best_for_ticker['COP Short']*100:>5.1f}% | {max_contracts:>2}x | ${total_premium:>7.2f}"
+            f"{opt['Ticker']:<5} | {opt['Expiration Date'][5:]} | "
+            f"{opt['Strike Price']:>6.2f} | {opt['Bid Price']:>4.2f} | "
+            f"{opt['COP Short']*100:>5.1f}% | {opt['Max Contracts']:>2} | ${opt['Total Premium']:>6.0f}"
         )
 
-    # Create header + table
     header = "<b>📋 Top 10 Summary — Best Option per Ticker</b>\n"
-    table_header = "Ticker | Exp Date | Strike | Bid | COP% | Cntr | Total Prem\n" + "-"*65
+    table_header = "Tkr  | Exp  | Strike | Bid | COP%  | Ct | Prem\n" + "-"*58
     table_body = "\n".join(summary_rows)
 
     send_telegram_message(header + "\n<pre>" + table_header + "\n" + table_body + "</pre>")
@@ -350,6 +354,7 @@ if all_options:
         f"💵 Available Buying Power: ${buying_power:.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
 
 
