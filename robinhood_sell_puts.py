@@ -333,58 +333,45 @@ try:
             if qty_raw == 0:
                 continue
 
-            contracts = abs(int(qty_raw))           # positive number of contracts
-            is_short = qty_raw < 0                  # sold if negative
+            contracts = abs(int(qty_raw))
+            is_short = qty_raw < 0
 
             instrument = r.helper.request_get(pos.get("option"))
             ticker = instrument.get("chain_symbol")
             inst_type = instrument.get("type", "").lower()
-
-            # Human-readable option label
-            if inst_type == "put":
-                opt_label = "📉 Sell Put"
-            elif inst_type == "call":
-                opt_label = "📈 Sell Call"
-            else:
-                opt_label = inst_type.capitalize() or "Option"
-
             strike = float(instrument.get("strike_price"))
             exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
 
-            # Average price from position
+            # Human-readable label
+            if inst_type == "put":
+                opt_label = "📉 Sell Put" if is_short else "📉 Buy Put"
+            elif inst_type == "call":
+                opt_label = "📈 Sell Call" if is_short else "📈 Buy Call"
+            else:
+                opt_label = inst_type.capitalize() or "Option"
+
+            # Average price per contract (signed)
             avg_price_raw = float(pos.get("average_price") or 0.0)
 
-            # Fetch live market data
-            inst_id = instrument.get("id")
-            try:
-                md = r.options.get_option_market_data_by_id(inst_id)[0]
-            except Exception:
-                md = {}
-            md_mark = float(md.get("mark_price") or 0.0)
+            # Robinhood actual market value for the position
+            market_value = float(pos.get("market_value") or 0.0)
 
-            # Scale mark price if per-share
-            mark_per_contract = md_mark * 100 if md_mark < 1 else md_mark
-            # Fallback: use position mark_price if md_mark zero
-            if mark_per_contract == 0.0:
-                pos_mark = float(pos.get("mark_price") or 0.0)
-                mark_per_contract = pos_mark * 100 if pos_mark < 1 else pos_mark
-
-            # --- PnL calculations (per contract) ---
+            # --- PnL calculations using Robinhood market_value ---
             if is_short:
                 orig_pnl = abs(avg_price_raw) * contracts
-                pnl_now = (abs(avg_price_raw) - mark_per_contract) * contracts
+                pnl_now = orig_pnl - market_value
             else:
                 orig_pnl = -abs(avg_price_raw) * contracts
-                pnl_now = (mark_per_contract - abs(avg_price_raw)) * contracts
+                pnl_now = market_value + orig_pnl
 
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
 
-            # Build message lines
+            # Build message lines (per-contract, no Avg column)
             msg_lines.append(
                 f"📌 <b>{ticker}</b> | {opt_label}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
                 f"Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}\n"
-                f"Mark (per contract): ${mark_per_contract:.2f}\n"
+                f"Mark (per contract): ${market_value/contracts:.2f}\n"
                 f"OrigPnL: ${abs(orig_pnl):.2f} | PnLNow: {pnl_emoji} ${abs(pnl_now):.2f}\n"
                 "────────────────────"
             )
