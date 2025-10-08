@@ -372,8 +372,8 @@ try:
             formatted_rows = [format_row(r) for r in rows_data]
             table_text = "\n".join([header_line, separator_line] + formatted_rows)
 
-            # Wrap in <pre> for monospace and smaller font in Telegram
-            send_telegram_message("📋 Current Open Positions\n<pre>" + table_text + "</pre>")
+            # Wrap table in <pre> and add <code> to shrink font
+            send_telegram_message("📋 Current Open Positions\n<pre><code>" + table_text + "</code></pre>")
 
 except Exception as e:
     send_telegram_message(f"Error generating current positions table: {e}")
@@ -401,6 +401,7 @@ if top10_best_options:
         f"💹 OrigPnL: ${orig_pnl:.2f} | PnLNow: ${pnl_now:.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
 
 
