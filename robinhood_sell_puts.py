@@ -358,13 +358,20 @@ try:
             md = r.options.get_option_market_data_by_id(opt_id)[0]
             mark_price = float(md.get("mark_price") or 0.0)
 
-            # --- PnL calculations ---
-            if is_short:
-                orig_pnl = avg_price * 100 * contracts
-                pnl_now = (avg_price - mark_price) * 100 * contracts
+            # --- Correct PnL calculations with scale check ---
+            scale = 1
+            # If price values look like dollars per contract (e.g. > 10), don’t scale again
+            if avg_price > 5:  # simple heuristic; option prices rarely exceed $5/share
+                scale = 1
             else:
-                orig_pnl = -avg_price * 100 * contracts
-                pnl_now = (mark_price - avg_price) * 100 * contracts
+                scale = 100
+            
+            if is_short:
+                orig_pnl = avg_price * scale * contracts
+                pnl_now = (avg_price - mark_price) * scale * contracts
+            else:
+                orig_pnl = -avg_price * scale * contracts
+                pnl_now = (mark_price - avg_price) * scale * contracts
 
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
 
