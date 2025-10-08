@@ -322,7 +322,7 @@ if all_options:
     table_body = "\n".join(summary_rows)
     send_telegram_message(header + "\n<pre>" + table_header + "\n" + table_body + "</pre>")
 
-# ------------------ CURRENT OPEN POSITIONS ALERT (ENHANCED FORMAT WITH PNL COLORS) ------------------
+# ------------------ CURRENT OPEN POSITIONS ALERT (FIXED PNL, ONE MESSAGE) ------------------
 try:
     positions = r.options.get_open_option_positions()
     if positions:
@@ -347,9 +347,9 @@ try:
             mark_price = float(pos.get('mark_price', 0.0))
             avg_price = float(pos.get('average_price', 0.0))
 
-            # Correct PnL calculations in actual dollars
-            orig_pnl = avg_price * qty
-            pnl_now = (mark_price - avg_price) * qty
+            # ✅ Correct PnL calculations in actual dollars
+            orig_pnl = avg_price * qty              # Premium received
+            pnl_now = (mark_price - avg_price) * qty  # Profit/Loss if closed now
 
             # Color emoji for PnL
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
