@@ -347,9 +347,9 @@ try:
             mark_price = float(pos.get('mark_price', 0.0))
             avg_price = float(pos.get('average_price', 0.0))
 
-            # Correct PnL calculations in real dollars
-            orig_pnl = avg_price * 100 * qty        # Premium received
-            pnl_now = (mark_price - avg_price) * 100 * qty  # Profit/Loss if closed now
+            # Correct PnL calculations in actual dollars
+            orig_pnl = avg_price * qty
+            pnl_now = (mark_price - avg_price) * qty
 
             # Color emoji for PnL
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
@@ -363,7 +363,7 @@ try:
                 "────────────────────"
             )
 
-        # Send the whole message at once
+        # Send all positions in one message
         send_telegram_message("\n".join(msg_lines))
 
 except Exception as e:
