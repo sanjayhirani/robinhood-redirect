@@ -326,15 +326,13 @@ if all_options:
 try:
     positions = r.options.get_open_option_positions()
     if positions:
-        # Columns for table
-        cols = ["Ticker","Type","Strike","Exp","Qty","Current","Avg","Mark","OrigPnL","PnLNow"]
+        cols = ["Tkr","Type","Strike","Exp","Qty","Curr","Avg","Mark","OrigPnL","PnLNow"]
         rows_data = []
 
         for pos in positions:
             qty = int(float(pos.get("quantity",0)))
             if qty == 0:
                 continue
-
             instrument = r.helper.request_get(pos.get("option"))
             ticker = instrument['chain_symbol']
             opt_type = instrument['type'].upper()
@@ -345,87 +343,49 @@ try:
             avg_price = float(pos.get('average_price',0.0))
             mark_price = float(pos.get('mark_price',0.0))
 
-            # Total PnL per position
-            orig_pnl = (avg_price * 100 * qty)
-            pnl_now = ((mark_price - avg_price) * 100 * qty)
+            # Per-contract PnL
+            orig_pnl = avg_price * 100 * qty
+            pnl_now = (mark_price - avg_price) * 100 * qty
 
-            # Add row
             rows_data.append([
                 ticker,
                 opt_type,
-                strike,
+                f"{strike:.2f}",
                 exp_date[5:],  # MM-DD
-                qty,
-                current_price,
-                avg_price,
-                mark_price,
-                orig_pnl,
-                pnl_now
+                str(qty),
+                f"${current_price:.2f}",
+                f"${avg_price:.2f}",
+                f"${mark_price:.2f}",
+                f"${orig_pnl:.2f}",
+                f"${pnl_now:.2f}"
             ])
 
-        if rows_data:
-            # Fixed-width formatting to match top 10 summary
-            fmt_rows = []
-            for row in rows_data:
-                fmt_rows.append(
-                    f"{row[0]:<5}|{row[1]:<3}|{row[2]:<6.2f}|{row[3]:<5}|"
-                    f"{row[4]:<2}|${row[5]:<5.2f}|${row[6]:<5.2f}|${row[7]:<5.2f}|"
-                    f"${row[8]:<6.2f}|${row[9]:<6.2f}"
-                )
+        # Column widths
+        col_widths = [max(len(col), max(len(row[i]) for row in rows_data)) for i, col in enumerate(cols)]
 
-            # Header row aligned with data
-            header = "Ticker|Type|Strike|Exp  |Qty|Current|Avg  |Mark |OrigPnL|PnLNow\n" + "-"*65
-            table_text = "<b>📋 Current Open Positions</b>\n<pre>" + header + "\n" + "\n".join(fmt_rows) + "</pre>"
+        def format_row(row):
+            return "|" + "|".join(f"{val:<{col_widths[i]}}" for i,val in enumerate(row)) + "|"
 
-            send_telegram_message(table_text)
+        header_line = format_row(cols)
+        separator_line = "|" + "|".join("-"*w for w in col_widths) + "|"
+        formatted_rows = [format_row(r) for r in rows_data]
+        table_text = "\n".join([header_line, separator_line] + formatted_rows)
+
+        send_telegram_message("<b>📋 Current Open Positions</b>\n<pre>" + table_text + "</pre>")
 
 except Exception as e:
     send_telegram_message(f"Error generating current positions table: {e}")
 
 # ------------------ BEST PUT ALERT ------------------
-if all_options:
-    # --- Compute top 10 tickers by highest COP across their top 3 puts ---
-    # Aggregate max COP per ticker
-    ticker_scores = {}
-    for opt in all_options:
-        ticker = opt['Ticker']
-        ticker_scores.setdefault(ticker, []).append(opt['COP Short'])
-    top10_tickers = sorted(ticker_scores.items(), key=lambda x: max(x[1]), reverse=True)[:10]
-    top10_ticker_list = [t[0] for t in top10_tickers]
-
-    # Filter all_options to only include options from top 10 tickers
-    top10_options = [opt for opt in all_options if opt['Ticker'] in top10_ticker_list]
-
-    # --- Score function remains the same ---
-    def score(opt):
-        days_to_exp = (datetime.strptime(opt['Expiration Date'], "%Y-%m-%d").date() - today).days
-        if days_to_exp <= 0:
-            return 0
-        liquidity = 1 + 0.5*(opt['Volume'] + opt['Open Interest']) / 1000
-        max_contracts = max(1, int(buying_power // (opt['Strike Price']*100)))
-        return opt['Bid Price']*100*max_contracts*opt['COP Short']*liquidity/days_to_exp
-
-    # --- Pick best option only from top 10 tickers ---
-if top10_best_options:  # reuse top10_best_options from summary
-    # --- Pick best option only from top10_best_options ---
+if top10_best_options:
+    # Use top10_best_options from summary directly
     best = max(top10_best_options, key=score)
-    max_contracts = best['Max Contracts']
-    total_premium = best['Total Premium']
+    max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
+    total_premium = best['Bid Price']*100*max_contracts
+    orig_pnl = total_premium
+    pnl_now = total_premium
 
-    historicals = r.stocks.get_stock_historicals(
-        best['TickerClean'], interval='day', span='month', bounds='regular'
-    )
-    df = pd.DataFrame(historicals)
-    df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
-    df.set_index('begins_at', inplace=True)
-    df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
-    df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
-    df = df.asfreq('B').ffill()
-    last_14_low = df['low'][-config.get("low_days",14):].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
-
-    app_url = f"robinhood://options?symbol={best['TickerClean']}"
-    web_url = f"https://robinhood.com/options/chains/{best['TickerClean']}"
 
     msg_lines = [
         "🔥 <b>Best Cash-Secured Put</b>",
@@ -436,7 +396,6 @@ if top10_best_options:  # reuse top10_best_options from summary
         f"🔺 Delta: {best['Delta']:.3f} | COP: {best['COP Short']*100:.1f}%",
         f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
         f"💵 Buying Power: ${buying_power:,.2f}",
-        f"🔗 <a href='{app_url}'>Open in Robinhood App</a> (preferred)",
-        f"🌐 <a href='{web_url}'>Open in Browser</a> (fallback)"
+        f"💹 OrigPnL: ${orig_pnl:.2f} | PnLNow: ${pnl_now:.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
