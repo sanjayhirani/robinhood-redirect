@@ -347,14 +347,18 @@ try:
             mark_price = float(pos.get('mark_price', 0.0))
             avg_price = float(pos.get('average_price', 0.0))
 
-            # ✅ Correct PnL calculations in actual dollars
-            orig_pnl = avg_price * qty              # Premium received
-            pnl_now = (mark_price - avg_price) * qty  # Profit/Loss if closed now
+            # ------------------ CORRECT PNL CALCULATION ------------------
+            # Original PnL = Premium received (always positive for a short option)
+            orig_pnl = avg_price * qty
 
-            # Color emoji for PnL
+            # Current PnL = Profit/Loss if closed now
+            # For short option: profit = premium received - cost to buy back
+            pnl_now = (avg_price - mark_price) * qty
+
+            # Color emoji
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
 
-            # Build each position block
+            # Build position block
             msg_lines.append(
                 f"📌 <b>{ticker}</b> | {opt_type}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {qty}\n"
@@ -363,7 +367,7 @@ try:
                 "────────────────────"
             )
 
-        # Send all positions in one message
+        # Send as a single message
         send_telegram_message("\n".join(msg_lines))
 
 except Exception as e:
@@ -392,3 +396,4 @@ if top10_best_options:
         f"💹 OrigPnL: ${orig_pnl:.2f} | PnLNow: ${pnl_now:.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
