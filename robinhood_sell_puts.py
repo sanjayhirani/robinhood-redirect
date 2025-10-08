@@ -351,7 +351,7 @@ if top10_best_options:  # use the best option per top 10 ticker
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
 
     # Prepare and send Telegram alert
-    option_url = f"https://robinhood.com/options/chains/{best['TickerClean']}"
+    option_url = f"https://www.google.com/url?q=https://robinhood.com/options/chains/{best['TickerClean']}"
 
     msg_lines = [
         "🔥 <b>Best Cash-Secured Put</b>",
@@ -365,3 +365,4 @@ if top10_best_options:  # use the best option per top 10 ticker
         f"🔗 <a href='{option_url}'>Open in Robinhood</a>"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
