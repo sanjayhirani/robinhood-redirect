@@ -326,32 +326,31 @@ if all_options:
 try:
     positions = r.options.get_open_option_positions()
     if positions:
-        # Prepare columns
-        cols = ["Ticker", "Type", "Strike", "Exp", "Qty", "Current", "Avg", "Mark", "OrigPnL", "PnLNow"]
+        # Columns
+        cols = ["Ticker","Type","Strike","Exp","Qty","Current","Avg","Mark","OrigPnL","PnLNow"]
         rows_data = []
 
         for pos in positions:
-            qty = int(float(pos.get("quantity", 0)))
+            qty = int(float(pos.get("quantity",0)))
             if qty == 0:
                 continue
-
             instrument = r.helper.request_get(pos.get("option"))
             ticker = instrument['chain_symbol']
-            option_type = instrument['type'].upper()
+            opt_type = instrument['type'].upper()
             strike = float(instrument['strike_price'])
             exp_date = instrument['expiration_date']
 
             current_price = float(r.stocks.get_latest_price(ticker)[0])
-            avg_price = float(pos.get('average_price', 0.0))
-            mark_price = float(pos.get('mark_price', 0.0))
+            avg_price = float(pos.get('average_price',0.0))
+            mark_price = float(pos.get('mark_price',0.0))
 
-            # PnL per contract (not multiplied by 100 or qty)
+            # Per-contract PnL
             orig_pnl = avg_price
             pnl_now = avg_price - mark_price
 
             rows_data.append([
                 ticker,
-                option_type,
+                opt_type,
                 f"{strike:.2f}",
                 exp_date,
                 str(qty),
@@ -362,20 +361,17 @@ try:
                 f"${pnl_now:.2f}"
             ])
 
-        # Calculate max widths per column
+        # Column widths based on formatted strings
         col_widths = [max(len(col), max(len(row[i]) for row in rows_data)) for i, col in enumerate(cols)]
 
-        # Row formatting function
         def format_row(row):
-            return "|" + "|".join(f"{val:<{col_widths[i]}}" for i, val in enumerate(row)) + "|"
+            return "|" + "|".join(f"{val:<{col_widths[i]}}" for i,val in enumerate(row)) + "|"
 
-        # Build table
         header_line = format_row(cols)
         separator_line = "|" + "|".join("-"*w for w in col_widths) + "|"
         formatted_rows = [format_row(r) for r in rows_data]
         table_text = "\n".join([header_line, separator_line] + formatted_rows)
 
-        # Send to Telegram
         send_telegram_message(table_text)
 
 except Exception as e:
@@ -439,3 +435,4 @@ if all_options:
             f"🌐 <a href='{web_url}'>Open in Browser</a> (fallback)"
         ]
         send_telegram_photo(buf, "\n".join(msg_lines))
+
