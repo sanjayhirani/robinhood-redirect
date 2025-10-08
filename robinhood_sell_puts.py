@@ -373,7 +373,6 @@ try:
                 f"📌 <b>{ticker}</b> | {opt_label}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
                 f"Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}\n"
-                f"Mark (per contract): ${mark_per_contract:.2f}\n"
                 f"OrigPnL: ${abs(orig_pnl):.2f} | PnLNow: {pnl_emoji} ${abs(pnl_now):.2f}\n"
                 "────────────────────"
             )
@@ -405,4 +404,5 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
