@@ -329,7 +329,7 @@ try:
         msg_lines = ["📋 <b>Current Open Positions</b>\n"]
 
         for pos in positions:
-            qty_raw = float(pos.get("quantity", 0))
+            qty_raw = float(pos.get("quantity") or 0)
             if qty_raw == 0:
                 continue
 
@@ -350,15 +350,15 @@ try:
             else:
                 opt_label = inst_type.capitalize() or "Option"
 
-            # PnL calculations using md_mark_price
+            # Average price per contract (signed)
             avg_price_raw = float(pos.get("average_price") or 0.0)
-            contracts = abs(int(qty_raw))
-            is_short = qty_raw < 0
-            
-            # Live mark price from market data
+
+            # Fetch live market data
+            md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
             md_mark_price = float(md.get("mark_price") or 0.0)
             mark_per_contract = md_mark_price * 100  # convert per-share to per-contract
-            
+
+            # --- PnL calculations ---
             if is_short:
                 orig_pnl = abs(avg_price_raw) * contracts
                 pnl_now = orig_pnl - (mark_per_contract * contracts)
@@ -373,7 +373,7 @@ try:
                 f"📌 <b>{ticker}</b> | {opt_label}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
                 f"Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}\n"
-                f"Mark (per contract): ${market_value/contracts:.2f}\n"
+                f"Mark (per contract): ${mark_per_contract:.2f}\n"
                 f"OrigPnL: ${abs(orig_pnl):.2f} | PnLNow: {pnl_emoji} ${abs(pnl_now):.2f}\n"
                 "────────────────────"
             )
@@ -406,4 +406,3 @@ if top10_best_options:
         f"💹 OrigPnL: ${orig_pnl:.2f} | PnLNow: ${pnl_now:.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
-
