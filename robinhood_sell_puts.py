@@ -335,6 +335,7 @@ try:
             instrument = r.helper.request_get(pos.get("option"))
             ticker = instrument['chain_symbol']
             opt_type_raw = instrument['type'].upper()
+
             if opt_type_raw == 'PUT':
                 opt_type = "📉 Sell Put"
             else:
@@ -342,23 +343,20 @@ try:
 
             strike = float(instrument['strike_price'])
             exp_date = pd.to_datetime(instrument['expiration_date']).strftime('%Y-%m-%d')
-
             current_price = float(r.stocks.get_latest_price(ticker)[0])
             mark_price = float(pos.get('mark_price', 0.0))
             avg_price = float(pos.get('average_price', 0.0))
 
-            # ------------------ CORRECT PNL CALCULATION ------------------
-            # Original PnL = Premium received (always positive for a short option)
-            orig_pnl = avg_price * qty
-
-            # Current PnL = Profit/Loss if closed now
-            # For short option: profit = premium received - cost to buy back
+            # ------------------ FIXED PNL LOGIC FOR SHORT POSITIONS ------------------
+            orig_pnl = avg_price * qty          # Premium received (raw)
             pnl_now = (avg_price - mark_price) * qty
 
-            # Color emoji
+            # Flip signs since Robinhood treats shorts as positive cost basis
+            orig_pnl = -orig_pnl
+            pnl_now = -pnl_now
+
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
 
-            # Build position block
             msg_lines.append(
                 f"📌 <b>{ticker}</b> | {opt_type}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {qty}\n"
@@ -367,7 +365,6 @@ try:
                 "────────────────────"
             )
 
-        # Send as a single message
         send_telegram_message("\n".join(msg_lines))
 
 except Exception as e:
@@ -396,4 +393,3 @@ if top10_best_options:
         f"💹 OrigPnL: ${orig_pnl:.2f} | PnLNow: ${pnl_now:.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
-
