@@ -322,7 +322,7 @@ if all_options:
     table_body = "\n".join(summary_rows)
     send_telegram_message(header + "\n<pre>" + table_header + "\n" + table_body + "</pre>")
 
-# ------------------ CURRENT OPEN POSITIONS ALERT (ROBUST, CORRECT PNL) ------------------
+# ------------------ CURRENT OPEN POSITIONS ALERT ------------------
 try:
     positions = r.options.get_open_option_positions()
     if positions:
@@ -340,7 +340,7 @@ try:
             ticker = instrument.get("chain_symbol")
             inst_type = instrument.get("type", "").lower()
 
-            # human readable label
+            # Human-readable option label
             if inst_type == "put":
                 opt_label = "📉 Sell Put"
             elif inst_type == "call":
@@ -351,11 +351,10 @@ try:
             strike = float(instrument.get("strike_price"))
             exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
 
-            # Prices from position object (avg may be negative for sold)
-            avg_price_raw = float(pos.get("average_price") or 0.0)   # e.g. -13.00 or 13.00
-            avg_per_contract = abs(avg_price_raw)                   # display as positive $13.00
+            # Average price from position
+            avg_price_raw = float(pos.get("average_price") or 0.0)
 
-            # Get live market data (mark price)
+            # Fetch live market data
             inst_id = instrument.get("id")
             try:
                 md = r.options.get_option_market_data_by_id(inst_id)[0]
@@ -363,39 +362,29 @@ try:
                 md = {}
             md_mark = float(md.get("mark_price") or 0.0)
 
-            # If market-data mark is a small number (<1), assume it's per-share and scale to per-contract
-            if md_mark >= 1.0:
-                mark_per_contract = md_mark
-            else:
-                mark_per_contract = md_mark * 100.0
-
-            # Fallback: if md_mark is zero/empty, try the position's mark_price (some endpoints include it)
+            # Scale mark price if per-share
+            mark_per_contract = md_mark * 100 if md_mark < 1 else md_mark
+            # Fallback: use position mark_price if md_mark zero
             if mark_per_contract == 0.0:
                 pos_mark = float(pos.get("mark_price") or 0.0)
-                # pos_mark might already be per-contract or per-share — try reasonable guess:
-                if pos_mark >= 1.0:
-                    mark_per_contract = pos_mark
-                else:
-                    mark_per_contract = pos_mark * 100.0
+                mark_per_contract = pos_mark * 100 if pos_mark < 1 else pos_mark
 
-            # --- PnL calculations (PER CONTRACT dollars) ---
+            # --- PnL calculations (per contract) ---
             if is_short:
-                # You received the premium (orig positive), profit if buyback is cheaper
-                orig_pnl = avg_per_contract * contracts
-                pnl_now = (avg_per_contract - mark_per_contract) * contracts
+                orig_pnl = abs(avg_price_raw) * contracts
+                pnl_now = (abs(avg_price_raw) - mark_per_contract) * contracts
             else:
-                # Long position (cost was paid)
-                orig_pnl = -avg_per_contract * contracts
-                pnl_now = (mark_per_contract - avg_per_contract) * contracts
+                orig_pnl = -abs(avg_price_raw) * contracts
+                pnl_now = (mark_per_contract - abs(avg_price_raw)) * contracts
 
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
 
-            # Build the message block (per-contract dollar values)
+            # Build message lines
             msg_lines.append(
                 f"📌 <b>{ticker}</b> | {opt_label}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
                 f"Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}\n"
-                f"Avg (per contract): ${avg_per_contract:.2f} | Mark (per contract): ${mark_per_contract:.2f}\n"
+                f"Mark (per contract): ${mark_per_contract:.2f}\n"
                 f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}\n"
                 "────────────────────"
             )
