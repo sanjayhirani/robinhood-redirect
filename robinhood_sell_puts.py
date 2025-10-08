@@ -402,7 +402,7 @@ if top10_best_options:
         f"💰 Bid: ${best['Bid Price']:.2f}",
         f"🔺 Delta: {best['Delta']:.3f} | COP: {best['COP Short']*100:.1f}%",
         f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
-        f"💵 Buying Power: ${buying_power:,.2f}",
-        f"💹 OrigPnL: ${orig_pnl:.2f} | PnLNow: ${pnl_now:.2f}"
+        f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
