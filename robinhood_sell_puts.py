@@ -326,7 +326,7 @@ if all_options:
 try:
     positions = r.options.get_open_option_positions()
     if positions:
-        cols = ["Tkr","Type","Strike","Exp","Qty","Curr","Avg","Mark","OrigPnL","PnLNow"]
+        cols = ["Tkr","Type","Strike","Exp","Qty","Curr","OrigPnL","PnLNow"]
         rows_data = []
 
         for pos in positions:
@@ -337,41 +337,37 @@ try:
             ticker = instrument['chain_symbol']
             opt_type = instrument['type'].upper()
             strike = float(instrument['strike_price'])
-            exp_date = instrument['expiration_date']
+            exp_date = instrument['expiration_date'][5:]  # MM-DD
 
             current_price = float(r.stocks.get_latest_price(ticker)[0])
             avg_price = float(pos.get('average_price',0.0))
-            mark_price = float(pos.get('mark_price',0.0))
 
-            # Per-contract PnL
-            orig_pnl = avg_price * 100 * qty
-            pnl_now = (mark_price - avg_price) * 100 * qty
+            # Per-contract PnL in dollars
+            orig_pnl = avg_price
+            pnl_now = current_price - strike
 
             rows_data.append([
                 ticker,
                 opt_type,
                 f"{strike:.2f}",
-                exp_date[5:],  # MM-DD
+                exp_date,
                 str(qty),
                 f"${current_price:.2f}",
-                f"${avg_price:.2f}",
-                f"${mark_price:.2f}",
                 f"${orig_pnl:.2f}",
                 f"${pnl_now:.2f}"
             ])
 
-        # Column widths
+        # Fixed-width formatting
         col_widths = [max(len(col), max(len(row[i]) for row in rows_data)) for i, col in enumerate(cols)]
-
         def format_row(row):
             return "|" + "|".join(f"{val:<{col_widths[i]}}" for i,val in enumerate(row)) + "|"
 
         header_line = format_row(cols)
         separator_line = "|" + "|".join("-"*w for w in col_widths) + "|"
         formatted_rows = [format_row(r) for r in rows_data]
-        table_text = "\n".join([header_line, separator_line] + formatted_rows)
+        table_text = "<b>📋 Current Open Positions</b>\n<pre>" + "\n".join([header_line, separator_line] + formatted_rows) + "</pre>"
 
-        send_telegram_message("<b>📋 Current Open Positions</b>\n<pre>" + table_text + "</pre>")
+        send_telegram_message(table_text)
 
 except Exception as e:
     send_telegram_message(f"Error generating current positions table: {e}")
@@ -399,3 +395,4 @@ if top10_best_options:
         f"💹 OrigPnL: ${orig_pnl:.2f} | PnLNow: ${pnl_now:.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
