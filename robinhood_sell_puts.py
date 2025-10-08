@@ -187,9 +187,10 @@ for ticker_raw, ticker_clean in safe_tickers:
         df.set_index('begins_at', inplace=True)
         df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
         df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
-        df = df.asfreq('B').ffill()  # ✅ df fix
+        df = df.asfreq('B').ffill()
         last_14_low = df['low'][-config.get("low_days",14):].min()
 
+        # Find tradable puts
         all_puts = r.options.find_tradable_options(ticker_clean, optionType="put")
         exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))
         exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff]
@@ -235,7 +236,7 @@ for ticker_raw, ticker_clean in safe_tickers:
     except Exception as e:
         send_telegram_message(f"{ticker_raw} error: {e}")
 
-# ------------------ TOP 10 SUMMARY ALERT ------------------
+# ------------------ FILTER & SEND TOP 10 TICKERS ------------------
 
 if all_options:
     def score(opt):
@@ -243,9 +244,10 @@ if all_options:
         if days_to_exp <= 0:
             return 0
         liquidity = 1 + 0.5 * (opt['Volume'] + opt['Open Interest']) / 1000
-        max_contracts = max(1, int(buying_power // (opt['Strike Price']*100)))
+        max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
         return opt['Bid Price'] * 100 * max_contracts * opt['COP Short'] * liquidity / days_to_exp
 
+    # Compute best score per ticker
     ticker_best = {}
     for opt in all_options:
         t = opt['Ticker']
@@ -255,6 +257,7 @@ if all_options:
         ):
             ticker_best[t] = {'score': sc, **opt}
 
+    # Sort and keep top 10 tickers
     top_tickers = sorted(
         ticker_best.values(),
         key=lambda x: (x['score'], x['COP Short']),
@@ -262,27 +265,64 @@ if all_options:
     )[:10]
     top_ticker_names = {t['Ticker'] for t in top_tickers}
 
-    summary_msg = ""
+    # Send Telegram messages only for top 10 tickers
     for t in top_ticker_names:
-        puts_for_ticker = [opt for opt in all_options if opt['Ticker']==t]
-        top3_for_ticker = sorted(puts_for_ticker, key=lambda x: x['COP Short'], reverse=True)[:3]
-        if not top3_for_ticker:
+        puts_for_ticker = [opt for opt in all_options if opt['Ticker'] == t]
+        top3 = sorted(puts_for_ticker, key=lambda x: x['COP Short'], reverse=True)[:3]
+        if not top3:
             continue
-        current_price = top3_for_ticker[0]['Current Price']
-        summary_msg += f"{t} ${current_price}\n"
-        summary_msg += "Exp|Strk|Bid|Delta|COP|Ct|Prem\n"
-        for opt in top3_for_ticker:
-            max_contracts = max(1, int(buying_power // (opt['Strike Price']*100)))
-            total_premium = opt['Bid Price']*100*max_contracts
-            exp_md = opt['Expiration Date'][5:]
-            row = f"{exp_md}|{opt['Strike Price']}|{opt['Bid Price']}|{opt['Delta']}|{opt['COP Short']}|{max_contracts}|{total_premium}"
-            summary_msg += row + "\n"
-        summary_msg += "\n"
+        msg_lines = [f"📊 {t} current: ${top3[0]['Current Price']:.2f}"]
+        for idx, p in enumerate(top3, 1):
+            max_contracts = max(1, int(buying_power // (p['Strike Price'] * 100)))
+            total_premium = p['Bid Price'] * 100 * max_contracts
+            msg_lines.append(
+                f"<b>Option {idx}:</b>\nExp: {p['Expiration Date']} | Strike: ${p['Strike Price']} | "
+                f"Bid: ${p['Bid Price']:.2f}\nDelta: {p['Delta']:.3f} | COP: {p['COP Short']*100:.1f}%\n"
+                f"Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}\n"
+                "────────────────────────────"
+            )
+        send_telegram_message("\n".join(msg_lines))
 
-    send_telegram_message(f"<pre>{summary_msg}</pre>")
+# ------------------ TOP 10 SUMMARY ALERT ------------------
+
+if all_options:
+    summary_rows = []
+    top10_best_options = []
+
+    # Build the data rows first
+    for t in top_ticker_names:
+        puts_for_ticker = [opt for opt in all_options if opt['Ticker'] == t]
+        if not puts_for_ticker:
+            continue
+
+        best_for_ticker = max(puts_for_ticker, key=lambda x: x['COP Short'])
+        max_contracts = max(1, int(buying_power // (best_for_ticker['Strike Price'] * 100)))
+        total_premium = best_for_ticker['Bid Price'] * 100 * max_contracts
+
+        best_for_ticker['Max Contracts'] = max_contracts
+        best_for_ticker['Total Premium'] = total_premium
+        top10_best_options.append(best_for_ticker)
+
+    # Sort by total premium descending
+    top10_best_options = sorted(top10_best_options, key=lambda x: x['Total Premium'], reverse=True)
+
+    # Fixed-width formatting for data rows
+    for opt in top10_best_options:
+        exp_md = opt['Expiration Date'][5:]  # MM-DD
+        summary_rows.append(
+            f"{opt['Ticker']:<5}|{exp_md:<5}|{opt['Strike Price']:<6.2f}|"
+            f"{opt['Bid Price']:<4.2f}|{opt['COP Short']*100:<5.1f}%|"
+            f"{opt['Max Contracts']:<2}|${opt['Total Premium']:<5.0f}"
+        )
+
+    # Header row left-aligned to match data
+    header = "<b>📋 Top 10 Summary — Best Option per Ticker</b>\n"
+    table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*40
+
+    table_body = "\n".join(summary_rows)
+    send_telegram_message(header + "\n<pre>" + table_header + "\n" + table_body + "</pre>")
 
 # ------------------ CURRENT OPEN POSITIONS ALERT ------------------
-
 try:
     positions = r.options.get_open_option_positions()
     if positions:
@@ -302,6 +342,7 @@ try:
             strike = float(instrument.get("strike_price"))
             exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
 
+            # Human-readable label
             if inst_type == "put":
                 opt_label = "📉 Sell Put" if is_short else "📉 Buy Put"
             elif inst_type == "call":
@@ -309,11 +350,15 @@ try:
             else:
                 opt_label = inst_type.capitalize() or "Option"
 
+            # Average price per contract (signed)
             avg_price_raw = float(pos.get("average_price") or 0.0)
+
+            # Fetch live market data
             md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
             md_mark_price = float(md.get("mark_price") or 0.0)
-            mark_per_contract = md_mark_price * 100
+            mark_per_contract = md_mark_price * 100  # convert per-share to per-contract
 
+            # --- PnL calculations ---
             if is_short:
                 orig_pnl = abs(avg_price_raw) * contracts
                 pnl_now = orig_pnl - (mark_per_contract * contracts)
@@ -323,6 +368,7 @@ try:
 
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
 
+            # Build message lines (per-contract, no Avg column)
             msg_lines.append(
                 f"📌 <b>{ticker}</b> | {opt_label}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
@@ -337,22 +383,13 @@ except Exception as e:
     send_telegram_message(f"Error generating current positions alert: {e}")
 
 # ------------------ BEST PUT ALERT ------------------
-
-if all_options:
-    best = max(all_options, key=score)
+if top10_best_options:
+    # Use top10_best_options from summary directly
+    best = max(top10_best_options, key=score)
     max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
     total_premium = best['Bid Price']*100*max_contracts
     orig_pnl = total_premium
     pnl_now = total_premium
-
-    historicals = r.stocks.get_stock_historicals(best['TickerClean'], interval='day', span='month', bounds='regular')
-    df = pd.DataFrame(historicals)
-    df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
-    df.set_index('begins_at', inplace=True)
-    df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
-    df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
-    df = df.asfreq('B').ffill()
-    last_14_low = df['low'][-config.get("low_days",14):].min()
 
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
 
