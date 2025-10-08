@@ -326,49 +326,50 @@ if all_options:
 try:
     positions = r.options.get_open_option_positions()
     if positions:
-        msg_lines = ["📋 <b>Current Open Positions</b>\n"]
+        msg_lines = ["📋 <b>Current Open Positions</b>"]
+
         for pos in positions:
             qty = int(float(pos.get("quantity", 0)))
             if qty == 0:
                 continue
 
             instrument = r.helper.request_get(pos.get("option"))
-            ticker = instrument['chain_symbol']
-            opt_type_raw = instrument['type'].upper()
+            ticker = instrument["chain_symbol"]
+            opt_type = instrument["type"].lower()
+            strike = float(instrument["strike_price"])
+            exp_date = pd.to_datetime(instrument["expiration_date"]).strftime("%Y-%m-%d")
 
-            if opt_type_raw == 'PUT':
-                opt_type = "📉 Sell Put"
-            else:
-                opt_type = "📈 Sell Call"
-
-            strike = float(instrument['strike_price'])
-            exp_date = pd.to_datetime(instrument['expiration_date']).strftime('%Y-%m-%d')
             current_price = float(r.stocks.get_latest_price(ticker)[0])
-            mark_price = float(pos.get('mark_price', 0.0))
-            avg_price = float(pos.get('average_price', 0.0))
+            avg_price = float(pos.get("average_price", 0.0))
+            mark_price = float(pos.get("mark_price", 0.0))
 
-            # ------------------ FIXED PNL LOGIC FOR SHORT POSITIONS ------------------
-            orig_pnl = avg_price * qty          # Premium received (raw)
-            pnl_now = (avg_price - mark_price) * qty
+            # --- PnL calculations ---
+            orig_pnl = avg_price * 100 * qty  # Premium received (always positive)
+            pnl_now = (avg_price - mark_price) * 100 * qty  # Realized + unrealized PnL
 
-            # Flip signs since Robinhood treats shorts as positive cost basis
-            orig_pnl = -orig_pnl
-            pnl_now = -pnl_now
+            # Determine option type label
+            if opt_type == "put":
+                opt_label = "Sell Put"
+            elif opt_type == "call":
+                opt_label = "Sell Call"
+            else:
+                opt_label = opt_type.capitalize()
 
+            # Color-coded PnL emoji
             pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
 
             msg_lines.append(
-                f"📌 <b>{ticker}</b> | {opt_type}\n"
+                f"\n📌 <b>{ticker}</b> | {opt_label}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {qty}\n"
                 f"Current Price: ${current_price:.2f}\n"
-                f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}\n"
+                f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${abs(pnl_now):.2f}\n"
                 "────────────────────"
             )
 
         send_telegram_message("\n".join(msg_lines))
 
 except Exception as e:
-    send_telegram_message(f"Error generating current positions alert: {e}")
+    send_telegram_message(f"Error generating current positions: {e}")
 
 # ------------------ BEST PUT ALERT ------------------
 if top10_best_options:
