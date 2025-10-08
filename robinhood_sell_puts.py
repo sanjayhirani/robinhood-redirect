@@ -322,21 +322,24 @@ if all_options:
     table_body = "\n".join(summary_rows)
     send_telegram_message(header + "\n<pre>" + table_header + "\n" + table_body + "</pre>")
 
-# ------------------ BEST PUT ALERT ------------------
+# ------------------ BEST PUT ALERT (restricted to top 10 summary options) ------------------
 
-if all_options:
+if top10_best_options:  # use the best option per top 10 ticker
     def score(opt):
         days_to_exp = (datetime.strptime(opt['Expiration Date'], "%Y-%m-%d").date() - today).days
-        if days_to_exp <=0:
+        if days_to_exp <= 0:
             return 0
-        liquidity = 1 + 0.5*(opt['Volume']+opt['Open Interest'])/1000
+        liquidity = 1 + 0.5*(opt['Volume'] + opt['Open Interest']) / 1000
         max_contracts = max(1, int(buying_power // (opt['Strike Price']*100)))
         return opt['Bid Price']*100*max_contracts*opt['COP Short']*liquidity/days_to_exp
 
-    best = max(all_options, key=score)
-    max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
-    total_premium = best['Bid Price']*100*max_contracts
+    # Pick the best among top 10 summary options only
+    best = max(top10_best_options, key=score)
 
+    max_contracts = best['Max Contracts']
+    total_premium = best['Total Premium']
+
+    # Prepare historicals for plotting
     historicals = r.stocks.get_stock_historicals(best['TickerClean'], interval='day', span='month', bounds='regular')
     df = pd.DataFrame(historicals)
     df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
@@ -347,19 +350,15 @@ if all_options:
     last_14_low = df['low'][-config.get("low_days",14):].min()
     buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
 
+    # Prepare and send Telegram alert
     msg_lines = [
-        "🔥 <b>Best Cash-Secured Put</b>",
+        "🔥 <b>Best Cash-Secured Put (Top 10 Summary Only)</b>",
         f"📊 {best['Ticker']} current: ${best['Current Price']:.2f}",
+        f"💵 Buying Power: ${buying_power:.2f}",
         f"✅ Expiration: {best['Expiration Date']}",
         f"💲 Strike: {best['Strike Price']}",
         f"💰 Bid: ${best['Bid Price']:.2f}",
         f"🔺 Delta: {best['Delta']:.3f} | COP: {best['COP Short']*100:.1f}%",
-        f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
-        f"💵 Available Buying Power: ${buying_power:.2f}"
+        f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
-
-
-
-
-
