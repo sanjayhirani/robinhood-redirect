@@ -269,20 +269,23 @@ try:
             md_mark_price = float(md.get("mark_price") or 0.0)
             mark_per_contract = md_mark_price * 100
 
-            # ------------------ PnL calculation for sell puts only ------------------
+            # PnL calculation for sell puts
             orig_pnl = abs(avg_price_raw) * contracts
             pnl_now = orig_pnl - (mark_per_contract * contracts)
 
             # Emoji based on 70% of original PnL
             pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
 
-            msg_lines.append(
-                f"📌 <b>{ticker}</b> | 📉 Sell Put\n"
-                f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
-                f"Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}\n"
-                f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}\n"
+            # Format each position like the best alert
+            msg_lines.extend([
+                f"📌 <b>{ticker}</b> | 📉 Sell Put",
+                f"Strike: ${strike:.2f}",
+                f"Exp: {exp_date}",
+                f"Qty: {contracts}",
+                f"Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}",
+                f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}",
                 "────────────────────"
-            )
+            ])
 
         send_telegram_message("\n".join(msg_lines))
 
