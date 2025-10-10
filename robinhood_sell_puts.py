@@ -101,11 +101,18 @@ for ticker_raw, ticker_clean in zip(TICKERS_RAW, TICKERS):
         risky_count += 1
 
 summary_lines = []
+
+# Add header for the check
+summary_lines.append("📋 Earnings/Dividends Check\n")
+
 if risky_msgs:
     summary_lines.append(f"{config['telegram_labels']['risky_tickers']}\n" + "\n".join(risky_msgs))
+
 if safe_tickers:
-    safe_rows = [", ".join([t[0] for t in safe_tickers][i:i+4]) for i in range(0,len(safe_tickers),4)]
+    # Format safe tickers in rows of 4 per line
+    safe_rows = [", ".join([t[0] for t in safe_tickers][i:i+4]) for i in range(0, len(safe_tickers), 4)]
     summary_lines.append(f"{config['telegram_labels']['safe_tickers']}\n" + "\n".join(safe_rows))
+
 summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
 send_telegram_message("\n".join(summary_lines))
 
@@ -308,5 +315,3 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_message("\n".join(msg_lines))
-
-
