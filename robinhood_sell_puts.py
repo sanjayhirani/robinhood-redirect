@@ -285,23 +285,19 @@ try:
 
             avg_price_raw = float(pos.get("average_price") or 0.0)
 
-            # Fetch live market data
             md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
-            mark_per_contract = float(md.get("mark_price") or 0.0) * 100  # per contract
+            md_mark_price = float(md.get("mark_price") or 0.0)
+            mark_per_contract = md_mark_price * 100
 
-            # --- PnL calculations ---
             if is_short:
                 orig_pnl = abs(avg_price_raw) * contracts
                 pnl_now = orig_pnl - (mark_per_contract * contracts)
             else:
-                orig_pnl = abs(avg_price_raw) * contracts
-                pnl_now = (mark_per_contract * contracts) - orig_pnl
+                orig_pnl = -abs(avg_price_raw) * contracts
+                pnl_now = (mark_per_contract * contracts) + orig_pnl
 
-            # --- Emoji logic ---
-            threshold = 0.7 * abs(orig_pnl)
-            pnl_emoji = "🟢" if pnl_now >= threshold else "🔴"
+            pnl_emoji = "🟢" if pnl_now >= 0.7 * abs(orig_pnl) else "🔴"
 
-            # Build message lines
             msg_lines.append(
                 f"📌 <b>{ticker}</b> | {opt_label}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
