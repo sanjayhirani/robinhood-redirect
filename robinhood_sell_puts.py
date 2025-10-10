@@ -116,7 +116,7 @@ def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_
 
 r.login(USERNAME, PASSWORD)
 today = datetime.now().date()
-cutoff = today + timedelta(days=config.get("expiry_limit_days", 21))
+cutoff = today + timedelta(days=config.get("expiry_limit_days", 30))
 
 # ------------------ EARNINGS / DIVIDENDS CHECK ------------------
 
@@ -404,3 +404,4 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
