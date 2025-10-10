@@ -385,7 +385,14 @@ except Exception as e:
 # ------------------ BEST PUT ALERT ------------------
 if top10_best_options:
     # Use top10_best_options from summary directly
-    best = max(top10_best_options, key=score)
+
+    # ✅ Updated logic: choose highest total premium where COP ≥ 70%, else highest premium overall
+    eligible_options = [opt for opt in top10_best_options if opt['COP Short'] >= 0.7]
+    if eligible_options:
+        best = max(eligible_options, key=lambda x: x['Total Premium'])
+    else:
+        best = max(top10_best_options, key=lambda x: x['Total Premium'])
+
     max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
     total_premium = best['Bid Price']*100*max_contracts
     orig_pnl = total_premium
@@ -404,5 +411,3 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
-
-
