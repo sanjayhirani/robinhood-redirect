@@ -287,14 +287,17 @@ try:
 
             md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
             md_mark_price = float(md.get("mark_price") or 0.0)
+            mark_per_contract = md_mark_price * 100
 
-            # Correct PnL calculation
+            # ---------------- Use original values from your script ----------------
             if is_short:
-                pnl_now = (avg_price_raw - md_mark_price) * 100 * contracts
+                orig_pnl = abs(avg_price_raw) * contracts
+                pnl_now = orig_pnl - (mark_per_contract * contracts)
             else:
-                pnl_now = (md_mark_price - avg_price_raw) * 100 * contracts
+                orig_pnl = abs(avg_price_raw) * contracts
+                pnl_now = (mark_per_contract * contracts) - orig_pnl
 
-            orig_pnl = abs(avg_price_raw) * 100 * contracts  # total original credit/debit
+            # Emoji based on 70% of the displayed PnL values
             pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
 
             msg_lines.append(
