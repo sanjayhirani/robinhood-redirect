@@ -287,23 +287,21 @@ try:
 
             md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
             md_mark_price = float(md.get("mark_price") or 0.0)
-            mark_per_contract = md_mark_price * 100
 
-            # Compute original PnL and current PnL correctly
-            orig_pnl = avg_price_raw * contracts  # keep sign from Robinhood
+            # Correct PnL calculation
             if is_short:
-                pnl_now = orig_pnl - (mark_per_contract * contracts)
+                pnl_now = (avg_price_raw - md_mark_price) * 100 * contracts
             else:
-                pnl_now = (mark_per_contract * contracts) - orig_pnl
+                pnl_now = (md_mark_price - avg_price_raw) * 100 * contracts
 
-            # Determine emoji: green if PnLNow >= 70% of original PnL, red otherwise
-            pnl_emoji = "🟢" if pnl_now >= 0.7 * abs(orig_pnl) else "🔴"
+            orig_pnl = abs(avg_price_raw) * 100 * contracts  # total original credit/debit
+            pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
 
             msg_lines.append(
                 f"📌 <b>{ticker}</b> | {opt_label}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
                 f"Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}\n"
-                f"OrigPnL: ${abs(orig_pnl):.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}\n"
+                f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}\n"
                 "────────────────────"
             )
 
@@ -328,6 +326,7 @@ if top10_best_options:
 
     msg_lines = [
         "🔥 <b>Best Cash-Secured Put</b>",
+        "", # <-- This creates a blank line
         f"📊 {best['Ticker']} current: ${best['Current Price']:.2f}",
         f"✅ Expiration: {best['Expiration Date']}",
         f"💲 Strike: ${best['Strike Price']:.2f}",
