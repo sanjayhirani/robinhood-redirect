@@ -366,7 +366,7 @@ try:
                 orig_pnl = -abs(avg_price_raw) * contracts
                 pnl_now = (mark_per_contract * contracts) + orig_pnl
 
-            pnl_emoji = "🟢" if pnl_now >= 0 else "🔴"
+            pnl_emoji = "🟢" if pnl_now >= 0.7 * abs(orig_pnl) else "🔴"
 
             # Build message lines (per-contract, no Avg column)
             msg_lines.append(
@@ -404,4 +404,5 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_photo(buf, "\n".join(msg_lines))
+
 
