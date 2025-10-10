@@ -311,6 +311,9 @@ try:
 except Exception as e:
     send_telegram_message(f"Error generating current positions alert: {e}")
 
+# Prepare list for best alert based on all options
+top10_best_options = sorted(all_options, key=lambda x: x['Total Premium'], reverse=True)[:10]
+
 # ------------------ BEST PUT ALERT ------------------
 if top10_best_options:
     eligible_options = [opt for opt in top10_best_options if opt['COP Short'] >= 0.7]
@@ -333,3 +336,4 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_message("\n".join(msg_lines))
+
