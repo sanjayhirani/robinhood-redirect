@@ -103,7 +103,7 @@ for ticker_raw, ticker_clean in zip(TICKERS_RAW, TICKERS):
 summary_lines = []
 
 # Add header for the check
-summary_lines.append("📋 Earnings/Dividends Check\n")
+summary_lines.append("<b>📋 Earnings/Dividends Check</b>\n")
 
 if risky_msgs:
     summary_lines.append(f"{config['telegram_labels']['risky_tickers']}\n" + "\n".join(risky_msgs))
@@ -116,14 +116,17 @@ if safe_tickers:
 summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
 send_telegram_message("\n".join(summary_lines))
 
-# ------------------ OPTIONS SCAN ------------------
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
+# ------------------ OPTIONS SCAN (PARALLELIZED WITH THROTTLE) ------------------
 all_options = []
 
 account_data = r.profiles.load_account_profile()
 buying_power = float(account_data.get('buying_power', 0.0))
 
-for ticker_raw, ticker_clean in safe_tickers:
+def scan_ticker(ticker_raw, ticker_clean):
+    ticker_results = []
     try:
         current_price = float(r.stocks.get_latest_price(ticker_clean)[0])
         historicals = r.stocks.get_stock_historicals(ticker_clean, interval='day', span='month', bounds='regular')
@@ -131,12 +134,14 @@ for ticker_raw, ticker_clean in safe_tickers:
         df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
         df.set_index('begins_at', inplace=True)
         df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
-        df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
+        df.rename(columns={'open':'open','close':'close','high':'high','low':'low'}, inplace=True)
         df = df.asfreq('B').ffill()
         last_14_low = df['low'][-config.get("low_days",14):].min()
 
-        # Find tradable puts
         all_puts = r.options.find_tradable_options(ticker_clean, optionType="put")
+        if not all_puts:
+            return []
+
         exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))
         exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff]
         exp_dates = exp_dates[:config.get("num_expirations",3)]
@@ -146,11 +151,13 @@ for ticker_raw, ticker_clean in safe_tickers:
             puts_for_exp = [opt for opt in all_puts if opt['expiration_date']==exp_date]
             strikes_below = sorted([float(opt['strike_price']) for opt in puts_for_exp if float(opt['strike_price']) < current_price], reverse=True)
             chosen_strikes = strikes_below[1:4] if len(strikes_below)>1 else strikes_below
-            for opt in puts_for_exp:
-                strike = float(opt['strike_price'])
-                if strike not in chosen_strikes:
-                    continue
-                md = r.options.get_option_market_data_by_id(opt['id'])[0]
+
+            option_ids = [opt['id'] for opt in puts_for_exp if float(opt['strike_price']) in chosen_strikes]
+            if not option_ids:
+                continue
+            market_data_list = r.options.get_option_market_data_by_id(option_ids)
+
+            for opt, md in zip([opt for opt in puts_for_exp if float(opt['strike_price']) in chosen_strikes], market_data_list):
                 bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
                 if bid_price < config.get("min_price",0.10):
                     continue
@@ -158,15 +165,16 @@ for ticker_raw, ticker_clean in safe_tickers:
                 cop_short = float(md.get('chance_of_profit_short') or 0.0)
                 open_interest = int(md.get('open_interest') or 0)
                 volume = int(md.get('volume') or 0)
-                dist_from_low = (strike - last_14_low) / last_14_low
+                dist_from_low = (float(opt['strike_price']) - last_14_low) / last_14_low
                 if dist_from_low < 0.01:
                     continue
+
                 candidate_puts.append({
                     "Ticker": ticker_raw,
                     "TickerClean": ticker_clean,
                     "Current Price": current_price,
                     "Expiration Date": exp_date,
-                    "Strike Price": strike,
+                    "Strike Price": float(opt['strike_price']),
                     "Bid Price": bid_price,
                     "Delta": delta,
                     "COP Short": cop_short,
@@ -174,12 +182,18 @@ for ticker_raw, ticker_clean in safe_tickers:
                     "Volume": volume
                 })
 
-        selected_puts = sorted(candidate_puts, key=lambda x:x['COP Short'], reverse=True)[:3]
-        if selected_puts:
-            all_options.extend(selected_puts)
+        return candidate_puts
 
     except Exception as e:
         send_telegram_message(f"{ticker_raw} error: {e}")
+        return []
+
+# ------------------ RUN PARALLELIZED SCAN ------------------
+with ThreadPoolExecutor(max_workers=5) as executor:
+    futures = [executor.submit(scan_ticker, t_raw, t_clean) for t_raw, t_clean in safe_tickers]
+    for f in as_completed(futures):
+        all_options.extend(f.result())
+        time.sleep(0.15)  # small throttle delay to avoid API limits
 
 # ------------------ TOP OPTIONS SCORING & SELECTION ------------------
 
@@ -276,14 +290,15 @@ try:
             # Emoji based on 70% of original PnL
             pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
 
-            # Format each position like the best alert
+            # Format each position with emojis per line
             msg_lines.extend([
                 f"📌 <b>{ticker}</b> | 📉 Sell Put",
-                f"Strike: ${strike:.2f}",
-                f"Exp: {exp_date}",
-                f"Qty: {contracts}",
-                f"Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}",
-                f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}",
+                f"💲 Strike: ${strike:.2f}",
+                f"✅ Exp: {exp_date}",
+                f"📦 Qty: {contracts}",
+                f"📊 Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}",
+                f"💰 Full Premium: ${orig_pnl:.2f}",
+                f"💵 Current Profit: {pnl_emoji} ${pnl_now:.2f}",
                 "────────────────────"
             ])
 
