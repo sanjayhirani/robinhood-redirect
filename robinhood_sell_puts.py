@@ -326,7 +326,7 @@ if top10_best_options:
     total_premium = best['Bid Price']*100*max_contracts
 
     msg_lines = [
-        "🔥 <b><u>Best Cash-Secured Put</b></u>",
+        "🔥 <b>Best Cash-Secured Put</b>",
         f"📊 {best['Ticker']} current: ${best['Current Price']:.2f}",
         f"✅ Expiration: {best['Expiration Date']}",
         f"💲 Strike: ${best['Strike Price']:.2f}",
