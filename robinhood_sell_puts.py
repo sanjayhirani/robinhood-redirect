@@ -1,18 +1,14 @@
-# robinhood_sell_puts.py
-
 import os
 import subprocess
 import requests
 import robin_stocks.robinhood as r
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import io
 import yaml
 from datetime import datetime, timedelta
 import yfinance as yf
 import re
+import io
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 
@@ -22,7 +18,7 @@ def ensure_package(pkg_name):
     except ImportError:
         subprocess.check_call([os.sys.executable, "-m", "pip", "install", pkg_name])
 
-for pkg in ["pandas","numpy","matplotlib","requests","robin_stocks","yfinance","PyYAML"]:
+for pkg in ["pandas","numpy","requests","robin_stocks","yfinance","PyYAML"]:
     ensure_package(pkg)
 
 # ------------------ LOAD CONFIG ------------------
@@ -53,64 +49,6 @@ def send_telegram_message(msg):
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     )
-
-def send_telegram_photo(buf, caption):
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
-        files={'photo': buf},
-        data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
-    )
-
-# ------------------ PLOTTING ------------------
-
-plot_cfg = config.get("plot", {})
-CANDLE_WIDTH = plot_cfg.get("candle_width", 0.6)
-FIGSIZE = plot_cfg.get("figsize", [12,6])
-BG_COLOR = plot_cfg.get("background_color","black")
-CURRENT_COLOR = plot_cfg.get("current_price_color","magenta")
-LOW_COLOR = plot_cfg.get("low_price_color","yellow")
-STRIKE_COLOR = plot_cfg.get("strike_color","cyan")
-EXPIRY_COLOR = plot_cfg.get("expiry_color","orange")
-
-def plot_candlestick(df, current_price, last_14_low, selected_strikes=None, exp_date=None, show_strikes=True):
-    fig, ax = plt.subplots(figsize=FIGSIZE)
-    fig.patch.set_facecolor(BG_COLOR)
-    ax.set_facecolor(BG_COLOR)
-    for i in range(len(df)):
-        color = 'lime' if df['close'].iloc[i] >= df['open'].iloc[i] else 'red'
-        ax.add_patch(plt.Rectangle(
-            (mdates.date2num(df.index[i]) - CANDLE_WIDTH/2, min(df['open'].iloc[i], df['close'].iloc[i])),
-            CANDLE_WIDTH,
-            abs(df['close'].iloc[i] - df['open'].iloc[i]),
-            color=color
-        ))
-        ax.plot([mdates.date2num(df.index[i]), mdates.date2num(df.index[i])],
-                [df['low'].iloc[i], df['high'].iloc[i]], color=color, linewidth=1)
-
-    ax.axhline(current_price, color=CURRENT_COLOR, linestyle='--', linewidth=1.5)
-    ax.axhline(last_14_low, color=LOW_COLOR, linestyle='--', linewidth=2)
-
-    if show_strikes and selected_strikes:
-        for strike in selected_strikes:
-            ax.axhline(strike, color=STRIKE_COLOR, linestyle='--', linewidth=1.5)
-
-    if exp_date:
-        exp_date_obj = pd.to_datetime(exp_date).tz_localize(None)
-        if df.index.min() <= exp_date_obj <= df.index.max():
-            ax.axvline(mdates.date2num(exp_date_obj), color=EXPIRY_COLOR, linestyle='--', linewidth=2)
-
-    ax.set_ylabel('Price ($)', color='white')
-    ax.tick_params(colors='white')
-    ax.grid(True, color='gray', linestyle='--', alpha=0.3)
-    ax.xaxis.set_major_locator(mdates.DayLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m'))
-    fig.autofmt_xdate(rotation=45)
-    plt.tight_layout()
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', facecolor=BG_COLOR)
-    buf.seek(0)
-    plt.close()
-    return buf
 
 # ------------------ LOGIN ------------------
 
@@ -247,7 +185,6 @@ if all_options:
         max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
         return opt['Bid Price'] * 100 * max_contracts * opt['COP Short'] * liquidity / days_to_exp
 
-    # Compute best score per ticker
     ticker_best = {}
     for opt in all_options:
         t = opt['Ticker']
@@ -257,7 +194,6 @@ if all_options:
         ):
             ticker_best[t] = {'score': sc, **opt}
 
-    # Sort and keep top 10 tickers
     top_tickers = sorted(
         ticker_best.values(),
         key=lambda x: (x['score'], x['COP Short']),
@@ -265,7 +201,6 @@ if all_options:
     )[:10]
     top_ticker_names = {t['Ticker'] for t in top_tickers}
 
-    # Send Telegram messages only for top 10 tickers
     for t in top_ticker_names:
         puts_for_ticker = [opt for opt in all_options if opt['Ticker'] == t]
         top3 = sorted(puts_for_ticker, key=lambda x: x['COP Short'], reverse=True)[:3]
@@ -289,7 +224,6 @@ if all_options:
     summary_rows = []
     top10_best_options = []
 
-    # Build the data rows first
     for t in top_ticker_names:
         puts_for_ticker = [opt for opt in all_options if opt['Ticker'] == t]
         if not puts_for_ticker:
@@ -303,10 +237,8 @@ if all_options:
         best_for_ticker['Total Premium'] = total_premium
         top10_best_options.append(best_for_ticker)
 
-    # Sort by total premium descending
     top10_best_options = sorted(top10_best_options, key=lambda x: x['Total Premium'], reverse=True)
 
-    # Fixed-width formatting for data rows
     for opt in top10_best_options:
         exp_md = opt['Expiration Date'][5:]  # MM-DD
         summary_rows.append(
@@ -315,7 +247,6 @@ if all_options:
             f"{opt['Max Contracts']:<2}|${opt['Total Premium']:<5.0f}"
         )
 
-    # Header row left-aligned to match data
     header = "<b>📋 Top 10 Summary — Best Option per Ticker</b>\n"
     table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*40
 
@@ -342,7 +273,6 @@ try:
             strike = float(instrument.get("strike_price"))
             exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
 
-            # Human-readable label
             if inst_type == "put":
                 opt_label = "📉 Sell Put" if is_short else "📉 Buy Put"
             elif inst_type == "call":
@@ -350,15 +280,12 @@ try:
             else:
                 opt_label = inst_type.capitalize() or "Option"
 
-            # Average price per contract (signed)
             avg_price_raw = float(pos.get("average_price") or 0.0)
 
-            # Fetch live market data
             md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
             md_mark_price = float(md.get("mark_price") or 0.0)
-            mark_per_contract = md_mark_price * 100  # convert per-share to per-contract
+            mark_per_contract = md_mark_price * 100
 
-            # --- PnL calculations ---
             if is_short:
                 orig_pnl = abs(avg_price_raw) * contracts
                 pnl_now = orig_pnl - (mark_per_contract * contracts)
@@ -368,7 +295,6 @@ try:
 
             pnl_emoji = "🟢" if pnl_now >= 0.7 * abs(orig_pnl) else "🔴"
 
-            # Build message lines (per-contract, no Avg column)
             msg_lines.append(
                 f"📌 <b>{ticker}</b> | {opt_label}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
@@ -384,9 +310,6 @@ except Exception as e:
 
 # ------------------ BEST PUT ALERT ------------------
 if top10_best_options:
-    # Use top10_best_options from summary directly
-
-    # ✅ Updated logic: choose highest total premium where COP ≥ 70%, else highest premium overall
     eligible_options = [opt for opt in top10_best_options if opt['COP Short'] >= 0.7]
     if eligible_options:
         best = max(eligible_options, key=lambda x: x['Total Premium'])
@@ -395,10 +318,6 @@ if top10_best_options:
 
     max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
     total_premium = best['Bid Price']*100*max_contracts
-    orig_pnl = total_premium
-    pnl_now = total_premium
-
-    buf = plot_candlestick(df, best['Current Price'], last_14_low, [best['Strike Price']], best['Expiration Date'])
 
     msg_lines = [
         "🔥 <b>Best Cash-Secured Put</b>",
@@ -410,4 +329,4 @@ if top10_best_options:
         f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
-    send_telegram_photo(buf, "\n".join(msg_lines))
+    send_telegram_message("\n".join(msg_lines))
