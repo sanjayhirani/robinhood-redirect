@@ -222,24 +222,21 @@ if all_options:
 
 if all_options:
     summary_rows = []
-    top10_best_options = []
 
-    for t in top_ticker_names:
-        puts_for_ticker = [opt for opt in all_options if opt['Ticker'] == t]
-        if not puts_for_ticker:
-            continue
+    # Build all options table instead of one per ticker
+    all_display_options = []
+    for opt in all_options:
+        max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
+        total_premium = opt['Bid Price'] * 100 * max_contracts
+        opt['Max Contracts'] = max_contracts
+        opt['Total Premium'] = total_premium
+        all_display_options.append(opt)
 
-        best_for_ticker = max(puts_for_ticker, key=lambda x: x['COP Short'])
-        max_contracts = max(1, int(buying_power // (best_for_ticker['Strike Price'] * 100)))
-        total_premium = best_for_ticker['Bid Price'] * 100 * max_contracts
+    # Sort all options by total premium descending
+    all_display_options = sorted(all_display_options, key=lambda x: x['Total Premium'], reverse=True)
 
-        best_for_ticker['Max Contracts'] = max_contracts
-        best_for_ticker['Total Premium'] = total_premium
-        top10_best_options.append(best_for_ticker)
-
-    top10_best_options = sorted(top10_best_options, key=lambda x: x['Total Premium'], reverse=True)
-
-    for opt in top10_best_options:
+    # Format all rows
+    for opt in all_display_options:
         exp_md = opt['Expiration Date'][5:]  # MM-DD
         summary_rows.append(
             f"{opt['Ticker']:<5}|{exp_md:<5}|{opt['Strike Price']:<6.2f}|"
@@ -247,11 +244,17 @@ if all_options:
             f"{opt['Max Contracts']:<2}|${opt['Total Premium']:<5.0f}"
         )
 
-    header = "<b>📋 Top 10 Summary — Best Option per Ticker</b>\n"
+    # Header
+    header = "<b>📋 All Options Summary — Across All Tickers</b>\n"
     table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*40
 
-    table_body = "\n".join(summary_rows)
-    send_telegram_message(header + "\n<pre>" + table_header + "\n" + table_body + "</pre>")
+    # Split into chunks of 30 rows
+    chunk_size = 30
+    for i in range(0, len(summary_rows), chunk_size):
+        chunk = summary_rows[i:i+chunk_size]
+        chunk_body = "\n".join(chunk)
+        msg = header + "\n<pre>" + table_header + "\n" + chunk_body + "</pre>"
+        send_telegram_message(msg)
 
 # ------------------ CURRENT OPEN POSITIONS ALERT ------------------
 try:
