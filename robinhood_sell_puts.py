@@ -174,7 +174,7 @@ for ticker_raw, ticker_clean in safe_tickers:
     except Exception as e:
         send_telegram_message(f"{ticker_raw} error: {e}")
 
-# ------------------ FILTER & SEND TOP 10 TICKERS ------------------
+# ------------------ TOP OPTIONS SCORING & SELECTION ------------------
 
 if all_options:
     def score(opt):
@@ -201,24 +201,7 @@ if all_options:
     )[:10]
     top_ticker_names = {t['Ticker'] for t in top_tickers}
 
-    for t in top_ticker_names:
-        puts_for_ticker = [opt for opt in all_options if opt['Ticker'] == t]
-        top3 = sorted(puts_for_ticker, key=lambda x: x['COP Short'], reverse=True)[:3]
-        if not top3:
-            continue
-        msg_lines = [f"📊 {t} current: ${top3[0]['Current Price']:.2f}"]
-        for idx, p in enumerate(top3, 1):
-            max_contracts = max(1, int(buying_power // (p['Strike Price'] * 100)))
-            total_premium = p['Bid Price'] * 100 * max_contracts
-            msg_lines.append(
-                f"<b>Option {idx}:</b>\nExp: {p['Expiration Date']} | Strike: ${p['Strike Price']} | "
-                f"Bid: ${p['Bid Price']:.2f}\nDelta: {p['Delta']:.3f} | COP: {p['COP Short']*100:.1f}%\n"
-                f"Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}\n"
-                "────────────────────────────"
-            )
-        send_telegram_message("\n".join(msg_lines))
-
-# ------------------ TOP 10 SUMMARY ALERT ------------------
+# ------------------ ALL OPTIONS SUMMARY ------------------
 
 if all_options:
     summary_rows = []
@@ -325,3 +308,4 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_message("\n".join(msg_lines))
+
