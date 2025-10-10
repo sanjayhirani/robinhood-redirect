@@ -201,12 +201,12 @@ if all_options:
     )[:10]
     top_ticker_names = {t['Ticker'] for t in top_tickers}
 
-# ------------------ ALL OPTIONS SUMMARY ------------------
+# ------------------ ALL OPTIONS SUMMARY (WITH DELTA) ------------------
 
 if all_options:
     summary_rows = []
 
-    # Build all options table instead of one per ticker
+    # Build all options table with Delta
     all_display_options = []
     for opt in all_options:
         max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
@@ -223,13 +223,13 @@ if all_options:
         exp_md = opt['Expiration Date'][5:]  # MM-DD
         summary_rows.append(
             f"{opt['Ticker']:<5}|{exp_md:<5}|{opt['Strike Price']:<6.2f}|"
-            f"{opt['Bid Price']:<4.2f}|{opt['COP Short']*100:<5.1f}%|"
+            f"{opt['Bid Price']:<4.2f}|{opt['Delta']:<5.2f}|{opt['COP Short']*100:<5.1f}%|"
             f"{opt['Max Contracts']:<2}|${opt['Total Premium']:<5.0f}"
         )
 
     # Header
     header = "<b>📋 All Options Summary — Across All Tickers</b>\n"
-    table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*40
+    table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*45
 
     # Split into chunks of 30 rows
     chunk_size = 30
@@ -308,4 +308,5 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_message("\n".join(msg_lines))
+
 
