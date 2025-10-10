@@ -289,22 +289,22 @@ try:
             md_mark_price = float(md.get("mark_price") or 0.0)
             mark_per_contract = md_mark_price * 100
 
-            # ---------------- Use original values from your script ----------------
+            # ------------------ ORIGINAL PnL CALCULATION ------------------
             if is_short:
                 orig_pnl = abs(avg_price_raw) * contracts
                 pnl_now = orig_pnl - (mark_per_contract * contracts)
             else:
-                orig_pnl = abs(avg_price_raw) * contracts
-                pnl_now = (mark_per_contract * contracts) - orig_pnl
+                orig_pnl = -abs(avg_price_raw) * contracts
+                pnl_now = (mark_per_contract * contracts) + orig_pnl
 
-            # Emoji based on 70% of the displayed PnL values
+            # ------------------ EMOJI LOGIC (ONLY CHANGE) ------------------
             pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
 
             msg_lines.append(
                 f"📌 <b>{ticker}</b> | {opt_label}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
                 f"Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}\n"
-                f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}\n"
+                f"OrigPnL: ${abs(orig_pnl):.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}\n"
                 "────────────────────"
             )
 
