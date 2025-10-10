@@ -353,10 +353,10 @@ with ThreadPoolExecutor(max_workers=5) as executor:
         all_options.extend(f.result())
         time.sleep(0.15)  # small throttle delay to avoid API limits
 
-# ------------------ FILTER OPTIONS GLOBALLY BY DELTA AND COP ------------------
+# ------------------ FILTER OPTIONS GLOBALLY BY ABS(DELTA) AND COP ------------------
 all_options = [
     opt for opt in all_options
-    if opt.get('Delta', 1) <= 0.3 and opt.get('COP Short', 0) >= 0.7
+    if abs(opt.get('Delta', 1)) <= 0.3 and opt.get('COP Short', 0) >= 0.7
 ]
 
 # ------------------ TOP OPTIONS SCORING & SELECTION ------------------
@@ -497,4 +497,3 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_message("\n".join(msg_lines))
-
