@@ -131,12 +131,25 @@ def scan_ticker(ticker_raw, ticker_clean):
         current_price = float(r.stocks.get_latest_price(ticker_clean)[0])
         historicals = r.stocks.get_stock_historicals(ticker_clean, interval='day', span='month', bounds='regular')
         df = pd.DataFrame(historicals)
+
+        # Ensure correct datetime index
         df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
         df.set_index('begins_at', inplace=True)
-        df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
-        df.rename(columns={'open':'open','close':'close','high':'high','low':'low'}, inplace=True)
+
+        # Keep and properly rename columns
+        df = df[['open_price', 'close_price', 'high_price', 'low_price', 'volume']].astype(float)
+        df.rename(columns={
+            'open_price': 'open',
+            'close_price': 'close',
+            'high_price': 'high',
+            'low_price': 'low'
+        }, inplace=True)
+
+        # Forward-fill missing business days
         df = df.asfreq('B').ffill()
-        last_14_low = df['low'][-config.get("low_days",14):].min()
+
+        # Use last 30 days for low calculation
+        last_30_low = df['low'][-30:].min()
 
         all_puts = r.options.find_tradable_options(ticker_clean, optionType="put")
         if not all_puts:
@@ -144,28 +157,37 @@ def scan_ticker(ticker_raw, ticker_clean):
 
         exp_dates = sorted(set([opt['expiration_date'] for opt in all_puts]))
         exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff]
-        exp_dates = exp_dates[:config.get("num_expirations",3)]
+        exp_dates = exp_dates[:config.get("num_expirations", 3)]
 
         candidate_puts = []
         for exp_date in exp_dates:
-            puts_for_exp = [opt for opt in all_puts if opt['expiration_date']==exp_date]
-            strikes_below = sorted([float(opt['strike_price']) for opt in puts_for_exp if float(opt['strike_price']) < current_price], reverse=True)
-            chosen_strikes = strikes_below[1:4] if len(strikes_below)>1 else strikes_below
+            puts_for_exp = [opt for opt in all_puts if opt['expiration_date'] == exp_date]
+            strikes_below = sorted(
+                [float(opt['strike_price']) for opt in puts_for_exp if float(opt['strike_price']) < current_price],
+                reverse=True
+            )
+            chosen_strikes = strikes_below[1:4] if len(strikes_below) > 1 else strikes_below
 
             option_ids = [opt['id'] for opt in puts_for_exp if float(opt['strike_price']) in chosen_strikes]
             if not option_ids:
                 continue
+
             market_data_list = r.options.get_option_market_data_by_id(option_ids)
 
-            for opt, md in zip([opt for opt in puts_for_exp if float(opt['strike_price']) in chosen_strikes], market_data_list):
+            for opt, md in zip(
+                [opt for opt in puts_for_exp if float(opt['strike_price']) in chosen_strikes],
+                market_data_list
+            ):
                 bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
-                if bid_price < config.get("min_price",0.10):
+                if bid_price < config.get("min_price", 0.10):
                     continue
+
                 delta = float(md.get('delta') or 0.0)
                 cop_short = float(md.get('chance_of_profit_short') or 0.0)
                 open_interest = int(md.get('open_interest') or 0)
                 volume = int(md.get('volume') or 0)
-                dist_from_low = (float(opt['strike_price']) - last_14_low) / last_14_low
+
+                dist_from_low = (float(opt['strike_price']) - last_30_low) / last_30_low
                 if dist_from_low < 0.01:
                     continue
 
@@ -333,3 +355,4 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_message("\n".join(msg_lines))
+
