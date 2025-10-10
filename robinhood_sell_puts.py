@@ -256,7 +256,7 @@ if all_options:
         msg = header + "\n<pre>" + table_header + "\n" + chunk_body + "</pre>"
         send_telegram_message(msg)
 
-# ------------------ CURRENT OPEN POSITIONS ALERT ------------------
+# ------------------ CURRENT OPEN POSITIONS ALERT (Sell Puts Only) ------------------
 try:
     positions = r.options.get_open_option_positions()
     if positions:
@@ -268,43 +268,29 @@ try:
                 continue
 
             contracts = abs(int(qty_raw))
-            is_short = qty_raw < 0
 
             instrument = r.helper.request_get(pos.get("option"))
             ticker = instrument.get("chain_symbol")
-            inst_type = instrument.get("type", "").lower()
             strike = float(instrument.get("strike_price"))
             exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
 
-            if inst_type == "put":
-                opt_label = "📉 Sell Put" if is_short else "📉 Buy Put"
-            elif inst_type == "call":
-                opt_label = "📈 Sell Call" if is_short else "📈 Buy Call"
-            else:
-                opt_label = inst_type.capitalize() or "Option"
-
             avg_price_raw = float(pos.get("average_price") or 0.0)
-
             md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
             md_mark_price = float(md.get("mark_price") or 0.0)
             mark_per_contract = md_mark_price * 100
 
-            # ------------------ ORIGINAL PnL CALCULATION ------------------
-            if is_short:
-                orig_pnl = abs(avg_price_raw) * contracts
-                pnl_now = orig_pnl - (mark_per_contract * contracts)
-            else:
-                orig_pnl = -abs(avg_price_raw) * contracts
-                pnl_now = (mark_per_contract * contracts) + orig_pnl
+            # ------------------ PnL calculation for sell puts only ------------------
+            orig_pnl = abs(avg_price_raw) * contracts
+            pnl_now = orig_pnl - (mark_per_contract * contracts)
 
-            # ------------------ EMOJI LOGIC (ONLY CHANGE) ------------------
+            # Emoji based on 70% of original PnL
             pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
 
             msg_lines.append(
-                f"📌 <b>{ticker}</b> | {opt_label}\n"
+                f"📌 <b>{ticker}</b> | 📉 Sell Put\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
                 f"Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}\n"
-                f"OrigPnL: ${abs(orig_pnl):.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}\n"
+                f"OrigPnL: ${orig_pnl:.2f} | PnLNow: {pnl_emoji} ${pnl_now:.2f}\n"
                 "────────────────────"
             )
 
