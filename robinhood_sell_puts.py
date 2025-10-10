@@ -285,19 +285,23 @@ try:
 
             avg_price_raw = float(pos.get("average_price") or 0.0)
 
+            # Fetch live market data
             md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
-            md_mark_price = float(md.get("mark_price") or 0.0)
-            mark_per_contract = md_mark_price * 100
+            mark_per_contract = float(md.get("mark_price") or 0.0) * 100  # per contract
 
+            # --- PnL calculations ---
             if is_short:
                 orig_pnl = abs(avg_price_raw) * contracts
                 pnl_now = orig_pnl - (mark_per_contract * contracts)
             else:
-                orig_pnl = -abs(avg_price_raw) * contracts
-                pnl_now = (mark_per_contract * contracts) + orig_pnl
+                orig_pnl = abs(avg_price_raw) * contracts
+                pnl_now = (mark_per_contract * contracts) - orig_pnl
 
-            pnl_emoji = "🟢" if pnl_now >= 0.7 * abs(orig_pnl) else "🔴"
+            # --- Emoji logic ---
+            threshold = 0.7 * abs(orig_pnl)
+            pnl_emoji = "🟢" if pnl_now >= threshold else "🔴"
 
+            # Build message lines
             msg_lines.append(
                 f"📌 <b>{ticker}</b> | {opt_label}\n"
                 f"Strike: ${strike:.2f} | Exp: {exp_date} | Qty: {contracts}\n"
@@ -326,7 +330,7 @@ if top10_best_options:
     total_premium = best['Bid Price']*100*max_contracts
 
     msg_lines = [
-        "🔥 <b>Best Cash-Secured Put</b>",
+        "🔥 <b><u>Best Cash-Secured Put</b></u>",
         f"📊 {best['Ticker']} current: ${best['Current Price']:.2f}",
         f"✅ Expiration: {best['Expiration Date']}",
         f"💲 Strike: ${best['Strike Price']:.2f}",
@@ -336,4 +340,3 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_message("\n".join(msg_lines))
-
