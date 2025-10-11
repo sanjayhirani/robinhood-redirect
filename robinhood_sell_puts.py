@@ -134,13 +134,17 @@ account_data = r.profiles.load_account_profile()
 buying_power = float(account_data.get('buying_power', 0.0))
 
 def scan_ticker(ticker_raw, ticker_clean):
-    ticker_results = []
+    """Scan a single ticker for candidate put options."""
+    candidate_puts = []
+
     try:
+        # Latest stock price
         latest_price = r.stocks.get_latest_price(ticker_clean)
         if not latest_price or latest_price[0] is None:
             return []
         current_price = float(latest_price[0])
 
+        # Historical lows
         historicals = r.stocks.get_stock_historicals(
             ticker_clean, interval='day', span='month', bounds='regular'
         )
@@ -165,163 +169,123 @@ def scan_ticker(ticker_raw, ticker_clean):
             'high_price': 'high',
             'low_price': 'low'
         }, inplace=True)
-
         df = df.asfreq('B').ffill()
-        low_days = int(config.get("low_days", 30))
-        last_low = df['low'][-low_days:].min()
+
+        last_low = df['low'][-int(config.get("low_days", 30)):].min()
         if pd.isna(last_low) or last_low <= 0:
             return []
 
+        # Fetch tradable put options
         all_puts = r.options.find_tradable_options(ticker_clean, optionType="put")
         if not all_puts:
             return []
 
+        # Normalize to list
         if isinstance(all_puts, dict):
-            maybe = all_puts.get('results') or all_puts.get('options') or None
-            if isinstance(maybe, list):
-                all_puts = maybe
-            else:
-                found = False
-                for v in all_puts.values():
-                    if isinstance(v, list):
-                        all_puts = v
-                        found = True
-                        break
-                if not found:
-                    return []
+            for v in all_puts.values():
+                if isinstance(v, list):
+                    all_puts = v
+                    break
         if not isinstance(all_puts, list):
-            try:
-                all_puts = list(all_puts)
-            except Exception:
-                return []
+            all_puts = list(all_puts)
 
+        # Filter expirations within cutoff
         exp_dates = sorted({opt.get('expiration_date') for opt in all_puts if opt.get('expiration_date')})
         exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff]
         exp_dates = exp_dates[:config.get("num_expirations", 3)]
 
-        candidate_puts = []
         for exp_date in exp_dates:
             puts_for_exp = [opt for opt in all_puts if opt.get('expiration_date') == exp_date]
             strikes_below = sorted(
-                [float(opt.get('strike_price')) for opt in puts_for_exp
-                 if opt.get('strike_price') and float(opt.get('strike_price')) < current_price],
+                [float(opt.get('strike_price')) for opt in puts_for_exp if float(opt.get('strike_price')) < current_price],
                 reverse=True
             )
             chosen_strikes = strikes_below[1:4] if len(strikes_below) > 1 else strikes_below
-
-            option_ids = [
-                opt.get('id') for opt in puts_for_exp
-                if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes and opt.get('id')
-            ]
-            if not option_ids:
+            if not chosen_strikes:
                 continue
 
-            market_data_list = None
-            try:
-                market_data_list = r.options.get_option_market_data_by_id(option_ids)
-            except Exception:
-                market_data_list = None
-
-            if not market_data_list:
-                market_data_list = []
-                for oid in option_ids:
-                    try:
-                        md = r.options.get_option_market_data_by_id(oid)
-                        if isinstance(md, list):
-                            market_data_list.extend(md)
-                        else:
-                            market_data_list.append(md)
-                    except Exception as e:
-                        print(f"Failed to fetch {oid}: {e}")
-                    time.sleep(0.05)
-
-            else:
-                if isinstance(market_data_list, dict):
-                    market_data_list = [market_data_list]
-                elif isinstance(market_data_list, list):
-                    flat = []
-                    for item in market_data_list:
-                        if isinstance(item, list):
-                            flat.extend(item)
-                        else:
-                            flat.append(item)
-                    market_data_list = flat
-
-            if not market_data_list:
-                continue
-
-            opts_selected = [opt for opt in puts_for_exp if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes]
-
-            pairs = []
-            if len(market_data_list) == len(option_ids) and len(opts_selected) == len(option_ids):
-                pairs = list(zip(opts_selected, market_data_list))
-            else:
-                md_map = {}
-                for md in market_data_list:
-                    key = None
-                    for possible_key in ('option', 'option_id', 'id'):
-                        if possible_key in md and md.get(possible_key):
-                            key = str(md.get(possible_key))
-                            break
-                    if key:
-                        md_map[key] = md
-                for opt in opts_selected:
-                    oid = opt.get('id') or opt.get('option_id')
-                    if oid and (str(oid) in md_map):
-                        pairs.append((opt, md_map[str(oid)]))
-                if not pairs:
-                    pairs = list(zip(opts_selected, market_data_list))
-
-            for opt, md in pairs:
+            # Fetch market data with throttle
+            option_ids = [opt.get('id') for opt in puts_for_exp if float(opt.get('strike_price')) in chosen_strikes]
+            market_data_list = []
+            for oid in option_ids:
                 try:
+                    md = r.options.get_option_market_data_by_id(oid)
+                    if isinstance(md, list):
+                        market_data_list.extend(md)
+                    else:
+                        market_data_list.append(md)
+                except Exception as e:
+                    print(f"Failed to fetch market data for {oid}: {e}")
+                time.sleep(0.05)  # Throttle
+
+            if not market_data_list:
+                continue
+
+            # Pair options with market data
+            md_map = {}
+            for md in market_data_list:
+                key = md.get('option_id') or md.get('id') or md.get('option')
+                if key:
+                    md_map[str(key)] = md
+            for opt in puts_for_exp:
+                oid = opt.get('id')
+                if oid and str(oid) in md_map:
+                    md = md_map[str(oid)]
                     bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
-                except Exception:
-                    bid_price = 0.0
-                if bid_price < config.get("min_price", 0.10):
-                    continue
-
-                delta = float(md.get('delta') or 0.0)
-                cop_short = float(md.get('chance_of_profit_short') or 0.0)
-                open_interest = int(md.get('open_interest') or 0)
-                volume = int(md.get('volume') or 0)
-
-                try:
+                    if bid_price < config.get("min_price", 0.10):
+                        continue
+                    delta = float(md.get('delta') or 0.0)
+                    cop_short = float(md.get('chance_of_profit_short') or 0.0)
+                    open_interest = int(md.get('open_interest') or 0)
+                    volume = int(md.get('volume') or 0)
                     strike_price = float(opt.get('strike_price'))
-                except Exception:
-                    continue
+                    dist_from_low = (strike_price - last_low) / last_low
+                    if dist_from_low < 0.01:
+                        continue
 
-                if last_low == 0:
-                    continue
-                dist_from_low = (strike_price - last_low) / last_low
-                if dist_from_low < 0.01:
-                    continue
-
-                candidate_puts.append({
-                    "Ticker": ticker_raw,
-                    "TickerClean": ticker_clean,
-                    "Current Price": current_price,
-                    "Expiration Date": exp_date,
-                    "Strike Price": strike_price,
-                    "Bid Price": bid_price,
-                    "Delta": delta,
-                    "COP Short": cop_short,
-                    "Open Interest": open_interest,
-                    "Volume": volume
-                })
-
-        return candidate_puts
+                    candidate_puts.append({
+                        "Ticker": ticker_raw,
+                        "TickerClean": ticker_clean,
+                        "Current Price": current_price,
+                        "Expiration Date": exp_date,
+                        "Strike Price": strike_price,
+                        "Bid Price": bid_price,
+                        "Delta": delta,
+                        "COP Short": cop_short,
+                        "Open Interest": open_interest,
+                        "Volume": volume
+                    })
 
     except Exception as e:
         send_telegram_message(f"{ticker_raw} error: {e}")
-        return []
+
+    return candidate_puts
 
 # ------------------ RUN PARALLELIZED SCAN ------------------
 
-with ThreadPoolExecutor(max_workers=5) as executor:
-    futures = [executor.submit(scan_ticker, t_raw, t_clean) for t_raw, t_clean in safe_tickers]
-    for f in as_completed(futures):
-        all_options.extend(f.result())
-        time.sleep(0.15)
+all_options = []
+
+max_workers = config.get("max_workers", 5)  # Limit concurrency to avoid API throttling
+throttle_delay = config.get("throttle_delay", 0.15)  # Delay between finished futures
+
+with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    # Submit all safe tickers for scanning
+    futures = {executor.submit(scan_ticker, t_raw, t_clean): (t_raw, t_clean) for t_raw, t_clean in safe_tickers}
+
+    for future in as_completed(futures):
+        t_raw, t_clean = futures[future]
+        try:
+            result = future.result()
+            if result:
+                all_options.extend(result)
+        except Exception as e:
+            # Catch errors per ticker so one failure does not stop the scan
+            send_telegram_message(f"Error scanning {t_raw}: {e}")
+        finally:
+            # Throttle between processing futures to reduce API stress
+            time.sleep(throttle_delay)
+
+# ------------------ FILTER OPTIONS BASED ON DELTA & COP ------------------
 
 all_options = [
     opt for opt in all_options
