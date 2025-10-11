@@ -126,15 +126,22 @@ account_data = r.profiles.load_account_profile()
 buying_power = float(account_data.get('buying_power', 0.0))
 
 def scan_ticker(ticker_raw, ticker_clean):
-    candidate_puts = []
-
+    """
+    Robust per-ticker scanner:
+    - handles missing historicals
+    - checks shapes returned by Robinhood wrapper
+    - falls back to per-id market data if bulk call returns None or wrong shape
+    - uses last 30 business days low (or config low_days if provided)
+    """
+    ticker_results = []
     try:
-        # ------------------ INITIAL DATA ------------------
+        # latest price (guard if API returns None or empty)
         latest_price = r.stocks.get_latest_price(ticker_clean)
         if not latest_price or latest_price[0] is None:
             return []
         current_price = float(latest_price[0])
 
+        # historicals (guard if None or empty)
         historicals = r.stocks.get_stock_historicals(
             ticker_clean, interval='day', span='month', bounds='regular'
         )
@@ -145,14 +152,18 @@ def scan_ticker(ticker_raw, ticker_clean):
         if df.empty or 'begins_at' not in df.columns:
             return []
 
+        # datetime index
         df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
         df.set_index('begins_at', inplace=True)
 
+        # ensure expected price columns exist
         expected_cols = ['open_price', 'close_price', 'high_price', 'low_price', 'volume']
         if not all(c in df.columns for c in expected_cols):
             return []
 
         df = df[expected_cols].astype(float)
+
+        # proper rename to short names (fixes previous 'low' KeyError)
         df.rename(columns={
             'open_price': 'open',
             'close_price': 'close',
@@ -160,129 +171,176 @@ def scan_ticker(ticker_raw, ticker_clean):
             'low_price': 'low'
         }, inplace=True)
 
+        # forward-fill business days
         df = df.asfreq('B').ffill()
 
+        # use last 30 days (or config override)
         low_days = int(config.get("low_days", 30))
-        last_low = df['low'].dropna().tail(low_days).min()
+        last_low = df['low'][-low_days:].min()
         if pd.isna(last_low) or last_low <= 0:
+            # insufficient low data — skip this ticker silently
             return []
 
-        # ------------------ FETCH PUTS ------------------
+        # find tradable puts (handle None/different shapes)
         all_puts = r.options.find_tradable_options(ticker_clean, optionType="put")
         if not all_puts:
             return []
 
-        # normalize dict/list structures
+        # normalize all_puts if API returned a dict structure
         if isinstance(all_puts, dict):
             maybe = all_puts.get('results') or all_puts.get('options') or None
             if isinstance(maybe, list):
                 all_puts = maybe
             else:
+                # try to find a list inside the dict values
+                found = False
                 for v in all_puts.values():
                     if isinstance(v, list):
                         all_puts = v
+                        found = True
                         break
-                else:
+                if not found:
                     return []
-
+        # ensure iterable
         if not isinstance(all_puts, list):
             try:
                 all_puts = list(all_puts)
             except Exception:
                 return []
 
-        # collect upcoming expirations
+        # collect expirations in the desired window
         exp_dates = sorted({opt.get('expiration_date') for opt in all_puts if opt.get('expiration_date')})
         exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff]
         exp_dates = exp_dates[:config.get("num_expirations", 3)]
 
-    except Exception as e:
-        send_telegram_message(f"{ticker_raw} error: {e}")
-        return []
+        candidate_puts = []
+        for exp_date in exp_dates:
+            puts_for_exp = [opt for opt in all_puts if opt.get('expiration_date') == exp_date]
+            strikes_below = sorted(
+                [float(opt.get('strike_price')) for opt in puts_for_exp
+                 if opt.get('strike_price') and float(opt.get('strike_price')) < current_price],
+                reverse=True
+            )
+            chosen_strikes = strikes_below[1:4] if len(strikes_below) > 1 else strikes_below
 
-    # ------------------ CANDIDATE PUTS SELECTION ------------------
-    for exp_date in exp_dates:
-        puts_for_exp = [opt for opt in all_puts if opt.get('expiration_date') == exp_date]
-        strikes_below = sorted(
-            [float(opt.get('strike_price')) for opt in puts_for_exp
-             if opt.get('strike_price') and float(opt.get('strike_price')) < current_price],
-            reverse=True
-        )
-        chosen_strikes = strikes_below[1:4] if len(strikes_below) > 1 else strikes_below
+            # option ids for chosen strikes
+            option_ids = [
+                opt.get('id') for opt in puts_for_exp
+                if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes and opt.get('id')
+            ]
+            if not option_ids:
+                continue
 
-        option_ids = [
-            opt.get('id') for opt in puts_for_exp
-            if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes and opt.get('id')
-        ]
-        if not option_ids:
-            continue
-
-        # Fetch market data for chosen strikes
-        market_data_list = []
-        for oid in option_ids:
+            # Attempt bulk market-data fetch, but handle None / wrong shapes
+            market_data_list = None
             try:
-                md_resp = r.options.get_option_market_data_by_id(oid)
-                if md_resp:
-                    if isinstance(md_resp, list):
-                        market_data_list.append(md_resp[0])
-                    else:
-                        market_data_list.append(md_resp)
+                market_data_list = r.options.get_option_market_data_by_id(option_ids)
             except Exception:
-                continue
-            time.sleep(0.05)
+                market_data_list = None
 
-        if not market_data_list:
-            continue
+            # If bulk failed or returned None/unexpected shape, fetch per-id (small throttle)
+            if not market_data_list:
+                market_data_list = []
+                for oid in option_ids:
+                    try:
+                        md_resp = r.options.get_option_market_data_by_id(oid)
+                        # md_resp could be a list or a dict
+                        if md_resp:
+                            if isinstance(md_resp, list):
+                                market_data_list.append(md_resp[0])
+                            else:
+                                market_data_list.append(md_resp)
+                    except Exception:
+                        # ignore individual md failures
+                        pass
+                    time.sleep(0.05)  # tiny sleep between single calls
+            else:
+                # normalize nested lists/dicts to a flat list
+                if isinstance(market_data_list, dict):
+                    market_data_list = [market_data_list]
+                elif isinstance(market_data_list, list):
+                    flat = []
+                    for item in market_data_list:
+                        if isinstance(item, list):
+                            flat.extend(item)
+                        else:
+                            flat.append(item)
+                    market_data_list = flat
 
-        opts_selected = [opt for opt in puts_for_exp if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes]
-        pairs = list(zip(opts_selected, market_data_list))
-
-        # ------------------ APPLY FILTERS ------------------
-        for opt, md in pairs:
-            try:
-                bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
-            except Exception:
-                bid_price = 0.0
-            if bid_price < config.get("min_price", 0.10):
-                continue
-
-            delta = float(md.get('delta') or 0.0)
-            cop_short = float(md.get('chance_of_profit_short') or 0.0)
-            open_interest = int(md.get('open_interest') or 0)
-            volume = int(md.get('volume') or 0)
-
-            try:
-                strike_price = float(opt.get('strike_price'))
-            except Exception:
-                continue
-
-            # Exclude strikes hit in last low_days
-            recent_lows = df['low'].dropna().tail(low_days)
-            if (recent_lows <= strike_price).any():
-                continue
-
-            if last_low == 0:
-                continue
-            dist_from_low = (strike_price - last_low) / last_low
-            if dist_from_low < 0.01:
+            if not market_data_list:
+                # no market data available for this expiration/strikes
                 continue
 
-            candidate_puts.append({
-                "Ticker": ticker_raw,
-                "TickerClean": ticker_clean,
-                "Current Price": current_price,
-                "Expiration Date": exp_date,
-                "Strike Price": strike_price,
-                "Bid Price": bid_price,
-                "Delta": delta,
-                "COP Short": cop_short,
-                "Open Interest": open_interest,
-                "Volume": volume
-            })
+            # try pairing options -> market data
+            opts_selected = [opt for opt in puts_for_exp if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes]
 
-    return candidate_puts
+            pairs = []
+            if len(market_data_list) == len(option_ids) and len(opts_selected) == len(option_ids):
+                # likely same order, zip safely
+                pairs = list(zip(opts_selected, market_data_list))
+            else:
+                # build a map using possible identifier fields
+                md_map = {}
+                for md in market_data_list:
+                    # try common keys that might contain the option id
+                    key = None
+                    for possible_key in ('option', 'option_id', 'id'):
+                        if possible_key in md and md.get(possible_key):
+                            key = str(md.get(possible_key))
+                            break
+                    if key:
+                        md_map[key] = md
+                # match by opt['id']
+                for opt in opts_selected:
+                    oid = opt.get('id') or opt.get('option_id')
+                    if oid and (str(oid) in md_map):
+                        pairs.append((opt, md_map[str(oid)]))
+                # if pairs empty but market_data_list not, fallback to zip up to min length
+                if not pairs:
+                    pairs = list(zip(opts_selected, market_data_list))
 
-    
+            # iterate pairs and apply filters (bid, delta, COP, dist_from_low)
+            for opt, md in pairs:
+                try:
+                    bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
+                except Exception:
+                    bid_price = 0.0
+                if bid_price < config.get("min_price", 0.10):
+                    continue
+
+                delta = float(md.get('delta') or 0.0)
+                cop_short = float(md.get('chance_of_profit_short') or 0.0)
+                open_interest = int(md.get('open_interest') or 0)
+                volume = int(md.get('volume') or 0)
+
+                # safe strike -> dist calculation
+                try:
+                    strike_price = float(opt.get('strike_price'))
+                except Exception:
+                    continue
+
+                # avoid division by zero
+                if last_low == 0:
+                    continue
+                dist_from_low = (strike_price - last_low) / last_low
+                if dist_from_low < 0.01:
+                    continue
+
+                candidate_puts.append({
+                    "Ticker": ticker_raw,
+                    "TickerClean": ticker_clean,
+                    "Current Price": current_price,
+                    "Expiration Date": exp_date,
+                    "Strike Price": strike_price,
+                    "Bid Price": bid_price,
+                    "Delta": delta,
+                    "COP Short": cop_short,
+                    "Open Interest": open_interest,
+                    "Volume": volume
+                })
+
+        return candidate_puts
+
     except Exception as e:
         # retain your existing behavior of notifying about ticker-specific exceptions
         send_telegram_message(f"{ticker_raw} error: {e}")
@@ -446,4 +504,3 @@ if eligible_options:
 else:
     # No eligible option found
     send_telegram_message("⚠️ No option meets COP ≥ 73% and Δ ≤ 0.25")
-
