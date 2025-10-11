@@ -318,14 +318,19 @@ def scan_ticker(ticker_raw, ticker_clean):
                     strike_price = float(opt.get('strike_price'))
                 except Exception:
                     continue
-
+                
+                # Exclude options whose strike was hit in last `low_days` days
+                low_days = int(config.get("low_days", 30))
+                if (df['low'][-low_days:] <= strike_price).any():
+                    continue  # skip this option
+                
                 # avoid division by zero
                 if last_low == 0:
                     continue
                 dist_from_low = (strike_price - last_low) / last_low
                 if dist_from_low < 0.01:
                     continue
-
+                
                 candidate_puts.append({
                     "Ticker": ticker_raw,
                     "TickerClean": ticker_clean,
@@ -504,3 +509,4 @@ if eligible_options:
 else:
     # No eligible option found
     send_telegram_message("⚠️ No option meets COP ≥ 73% and Δ ≤ 0.25")
+
