@@ -3,26 +3,16 @@
 tickers_file: "tickers.txt"  # one ticker per line, emojis allowed for Telegram
 
 # Number of upcoming expiration dates to check
-num_expirations: 3
+num_expirations: 4
 
 # Minimum bid price for options
 min_price: 0.10
 
 # Days to calculate 14-day low
-low_days: 14
+low_days: 30
 
 # Maximum expiry days to consider
-expiry_limit_days: 21
-
-# Plot settings
-plot:
-  candle_width: 0.6
-  figsize: [12,6]
-  background_color: "black"
-  current_price_color: "magenta"
-  low_price_color: "yellow"
-  strike_color: "cyan"
-  expiry_color: "orange"
+expiry_limit_days: 30
 
 # Telegram message labels (can include emojis)
 telegram_labels:
