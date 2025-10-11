@@ -28,13 +28,17 @@ for pkg in ["pandas","numpy","requests","robin_stocks","yfinance","PyYAML"]:
 with open("config.yaml", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
-# ------------------ LOAD TICKERS ------------------
+# ------------------ LOAD CURRENT TICKERS ONLY ------------------
 
 TICKERS_FILE = config.get("tickers_file", "tickers.txt")
 if not os.path.exists(TICKERS_FILE):
     raise FileNotFoundError(f"{TICKERS_FILE} not found.")
 
-TICKERS_RAW = [line.strip() for line in open(TICKERS_FILE, encoding="utf-8") if line.strip()]
+# Read only the current tickers
+with open(TICKERS_FILE, encoding="utf-8") as f:
+    TICKERS_RAW = [line.strip() for line in f if line.strip()]
+
+# Clean ticker symbols
 TICKERS = [re.sub(r'[^A-Z0-9.-]', '', t.upper()) for t in TICKERS_RAW]
 
 # ------------------ SECRETS ------------------
@@ -65,12 +69,7 @@ risky_msgs = []
 safe_count = 0
 risky_count = 0
 
-# Only process tickers currently in tickers.txt
 for ticker_raw, ticker_clean in zip(TICKERS_RAW, TICKERS):
-    if ticker_clean not in TICKERS:
-        # Skip removed tickers entirely
-        continue
-
     try:
         stock = yf.Ticker(ticker_clean)
         msg_parts = [f"{ticker_raw}"]
@@ -107,10 +106,30 @@ for ticker_raw, ticker_clean in zip(TICKERS_RAW, TICKERS):
         risky_msgs.append(f"{ticker_raw} error: {e}")
         risky_count += 1
 
+# Filter messages to ensure only current tickers
+risky_msgs = [msg for msg in risky_msgs if any(t in msg for t in TICKERS_RAW)]
+safe_tickers = [(raw, clean) for raw, clean in safe_tickers if raw in TICKERS_RAW]
+
+summary_lines = []
+
+# Add header for the check
+summary_lines.append("<b>📋 Earnings/Dividends Check</b>\n")
+
+if risky_msgs:
+    summary_lines.append(f"{config['telegram_labels']['risky_tickers']}\n" + "\n".join(risky_msgs))
+
+if safe_tickers:
+    # Format safe tickers in rows of 4 per line
+    safe_rows = [", ".join([t[0] for t in safe_tickers][i:i+4]) for i in range(0, len(safe_tickers), 4)]
+    summary_lines.append(f"{config['telegram_labels']['safe_tickers']}\n" + "\n".join(safe_rows))
+
+summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
+send_telegram_message("\n".join(summary_lines))
 
 # ------------------ OPTIONS SCAN (PARALLELIZED WITH THROTTLE) ------------------
 
 all_options = []
+
 account_data = r.profiles.load_account_profile()
 buying_power = float(account_data.get('buying_power', 0.0))
 
@@ -140,9 +159,14 @@ def scan_ticker(ticker_raw, ticker_clean):
             return []
 
         df = df[expected_cols].astype(float)
-        df.rename(columns={'open_price': 'open','close_price': 'close','high_price': 'high','low_price': 'low'}, inplace=True)
-        df = df.asfreq('B').ffill()
+        df.rename(columns={
+            'open_price': 'open',
+            'close_price': 'close',
+            'high_price': 'high',
+            'low_price': 'low'
+        }, inplace=True)
 
+        df = df.asfreq('B').ffill()
         low_days = int(config.get("low_days", 30))
         last_low = df['low'][-low_days:].min()
         if pd.isna(last_low) or last_low <= 0:
@@ -179,12 +203,16 @@ def scan_ticker(ticker_raw, ticker_clean):
         for exp_date in exp_dates:
             puts_for_exp = [opt for opt in all_puts if opt.get('expiration_date') == exp_date]
             strikes_below = sorted(
-                [float(opt.get('strike_price')) for opt in puts_for_exp if opt.get('strike_price') and float(opt.get('strike_price')) < current_price],
+                [float(opt.get('strike_price')) for opt in puts_for_exp
+                 if opt.get('strike_price') and float(opt.get('strike_price')) < current_price],
                 reverse=True
             )
             chosen_strikes = strikes_below[1:4] if len(strikes_below) > 1 else strikes_below
 
-            option_ids = [opt.get('id') for opt in puts_for_exp if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes and opt.get('id')]
+            option_ids = [
+                opt.get('id') for opt in puts_for_exp
+                if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes and opt.get('id')
+            ]
             if not option_ids:
                 continue
 
@@ -261,6 +289,7 @@ def scan_ticker(ticker_raw, ticker_clean):
                     strike_price = float(opt.get('strike_price'))
                 except Exception:
                     continue
+
                 if last_low == 0:
                     continue
                 dist_from_low = (strike_price - last_low) / last_low
@@ -294,9 +323,10 @@ with ThreadPoolExecutor(max_workers=5) as executor:
         all_options.extend(f.result())
         time.sleep(0.15)
 
-# ------------------ FILTER OPTIONS GLOBALLY BY ABS(DELTA) AND COP ------------------
-
-all_options = [opt for opt in all_options if abs(opt.get('Delta', 1)) <= 0.3 and opt.get('COP Short', 0) >= 0.7]
+all_options = [
+    opt for opt in all_options
+    if abs(opt.get('Delta', 1)) <= 0.3 and opt.get('COP Short', 0) >= 0.7
+]
 
 # ------------------ TOP OPTIONS SCORING & SELECTION ------------------
 
@@ -318,7 +348,11 @@ if all_options:
         ):
             ticker_best[t] = {'score': sc, **opt}
 
-    top_tickers = sorted(ticker_best.values(), key=lambda x: (x['score'], x['COP Short']), reverse=True)[:10]
+    top_tickers = sorted(
+        ticker_best.values(),
+        key=lambda x: (x['score'], x['COP Short']),
+        reverse=True
+    )[:10]
     top_ticker_names = {t['Ticker'] for t in top_tickers}
 
 # ------------------ ALL OPTIONS SUMMARY ------------------
@@ -334,6 +368,7 @@ if all_options:
         all_display_options.append(opt)
 
     all_display_options = sorted(all_display_options, key=lambda x: x['Total Premium'], reverse=True)
+
     for opt in all_display_options:
         exp_md = opt['Expiration Date'][5:]
         summary_rows.append(
@@ -362,6 +397,7 @@ try:
             qty_raw = float(pos.get("quantity") or 0)
             if qty_raw == 0:
                 continue
+
             contracts = abs(int(qty_raw))
             instrument = r.helper.request_get(pos.get("option"))
             ticker = instrument.get("chain_symbol")
@@ -374,6 +410,7 @@ try:
             orig_pnl = abs(avg_price_raw) * contracts
             pnl_now = orig_pnl - (mark_per_contract * contracts)
             pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
+
             msg_lines.extend([
                 f"📌 <b>{ticker}</b> | 📉 Sell Put",
                 f"💲 Strike: ${strike:.2f}",
@@ -384,7 +421,9 @@ try:
                 f"💵 Current Profit: {pnl_emoji} ${pnl_now:.2f}",
                 "────────────────────"
             ])
+
         send_telegram_message("\n".join(msg_lines))
+
 except Exception as e:
     send_telegram_message(f"Error generating current positions alert: {e}")
 
@@ -394,11 +433,7 @@ top10_best_options = sorted(all_options, key=lambda x: x['Total Premium'], rever
 
 if top10_best_options:
     eligible_options = [opt for opt in top10_best_options if opt['COP Short'] >= 0.7]
-    if eligible_options:
-        best = max(eligible_options, key=lambda x: x['Total Premium'])
-    else:
-        best = max(top10_best_options, key=lambda x: x['Total Premium'])
-
+    best = max(eligible_options, key=lambda x: x['Total Premium']) if eligible_options else max(top10_best_options, key=lambda x: x['Total Premium'])
     max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
     total_premium = best['Bid Price']*100*max_contracts
 
