@@ -476,10 +476,16 @@ top10_best_options = sorted(all_options, key=lambda x: x['Total Premium'], rever
 
 # ------------------ BEST PUT ALERT ------------------
 if top10_best_options:
-    eligible_options = [opt for opt in top10_best_options if opt['COP Short'] >= 0.7]
+# Filter by COP ≥ 0.73 and abs(Delta) ≤ 0.25
+    eligible_options = [
+        opt for opt in top10_best_options
+        if opt['COP Short'] >= 0.73 and abs(opt['Delta']) <= 0.25
+    ]
+    
     if eligible_options:
         best = max(eligible_options, key=lambda x: x['Total Premium'])
     else:
+        # fallback if no options meet criteria
         best = max(top10_best_options, key=lambda x: x['Total Premium'])
 
     max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
@@ -497,3 +503,4 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_message("\n".join(msg_lines))
+
