@@ -474,26 +474,23 @@ except Exception as e:
 # Prepare list for best alert based on all options
 top10_best_options = sorted(all_options, key=lambda x: x['Total Premium'], reverse=True)[:10]
 
-# ------------------ BEST PUT ALERT ------------------
-if top10_best_options:
-# Filter by COP ≥ 0.73 and abs(Delta) ≤ 0.25
-    eligible_options = [
-        opt for opt in top10_best_options
-        if opt['COP Short'] >= 0.73 and abs(opt['Delta']) <= 0.25
-    ]
-    
-    if eligible_options:
-        best = max(eligible_options, key=lambda x: x['Total Premium'])
-    else:
-        # fallback if no options meet criteria
-        best = max(top10_best_options, key=lambda x: x['Total Premium'])
+# ------------------ BEST PUT ALERT (STRICT FILTER) ------------------
+# Filter all options by COP ≥ 0.73 and abs(Delta) ≤ 0.25
+eligible_options = [
+    opt for opt in all_options
+    if opt['COP Short'] >= 0.73 and abs(opt['Delta']) <= 0.25
+]
+
+if eligible_options:
+    # Pick the option with the highest total premium
+    best = max(eligible_options, key=lambda x: x['Total Premium'])
 
     max_contracts = max(1, int(buying_power // (best['Strike Price']*100)))
     total_premium = best['Bid Price']*100*max_contracts
 
     msg_lines = [
         "🔥 <b>Best Cash-Secured Put</b>",
-        "", # <-- This creates a blank line
+        "",
         f"📊 {best['Ticker']} current: ${best['Current Price']:.2f}",
         f"✅ Expiration: {best['Expiration Date']}",
         f"💲 Strike: ${best['Strike Price']:.2f}",
@@ -504,3 +501,6 @@ if top10_best_options:
     ]
     send_telegram_message("\n".join(msg_lines))
 
+else:
+    # No eligible option found
+    send_telegram_message("⚠️ No option meets COP ≥ 73% and Δ ≤ 0.25")
