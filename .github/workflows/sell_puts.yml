@@ -3,7 +3,7 @@ name: Robinhood Sell Puts Scanner
 on:
   workflow_dispatch:
   schedule:
-    - cron: '30 15 * * 1'  # every Monday at 11:30 AM ET
+    - cron: '30 15 * * 1-4'  # Mon-Thu at 11:30 AM ET
 
 jobs:
   run-scanner:
