@@ -8,7 +8,7 @@ num_expirations: 4
 # Minimum bid price for options
 min_price: 0.10
 
-# Days to calculate 14-day low
+# Days to calculate 30-day low
 low_days: 30
 
 # Maximum expiry days to consider
