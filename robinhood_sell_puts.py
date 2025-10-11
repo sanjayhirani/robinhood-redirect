@@ -504,3 +504,42 @@ if eligible_options:
 else:
     # No eligible option found
     send_telegram_message("⚠️ No option meets COP ≥ 73% and Δ ≤ 0.25")
+
+# ------------------ 30-DAY LOW ALERT ------------------
+
+low_rows = []
+for ticker_raw, ticker_clean in TICKERS:
+    try:
+        historicals = r.stocks.get_stock_historicals(
+            ticker_clean, interval='day', span='month', bounds='regular'
+        )
+        if not historicals:
+            continue
+
+        df = pd.DataFrame(historicals)
+        if df.empty or 'begins_at' not in df.columns or 'low_price' not in df.columns:
+            continue
+
+        df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
+        df.set_index('begins_at', inplace=True)
+        df['low_price'] = df['low_price'].astype(float)
+
+        # Forward-fill business days (optional)
+        df = df.asfreq('B').ffill()
+
+        low_30 = df['low_price'][-30:].min()
+        low_rows.append((ticker_raw, low_30))
+
+    except Exception as e:
+        low_rows.append((ticker_raw, f"Error: {e}"))
+
+# Format the table
+table_lines = ["<b>📉 30-Day Low Prices</b>", "-"*25]
+for t, low in low_rows:
+    if isinstance(low, float):
+        table_lines.append(f"{t:<6} | ${low:<.2f}")
+    else:
+        table_lines.append(f"{t:<6} | {low}")
+
+# Send via Telegram
+send_telegram_message("\n".join(table_lines))
