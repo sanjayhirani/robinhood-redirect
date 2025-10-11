@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 import yfinance as yf
 import re
 import io
-import html
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 
@@ -409,29 +408,20 @@ if all_options:
         exp_md = opt['Expiration Date'][5:]  # MM-DD
         summary_rows.append(
             f"{opt['Ticker']:<5}|{exp_md:<5}|{opt['Strike Price']:<6.2f}|"
-            f"{opt['Bid Price']:<4.2f}|{opt['Delta']:<5.2f}|{opt['COP Short']*100:<5.1f}%|"
+            f"{opt['Bid Price']:<4.2f}|{abs(opt['Delta']):<5.2f}|{opt['COP Short']*100:<5.1f}%|"
             f"{opt['Max Contracts']:<2}|${opt['Total Premium']:<5.0f}"
         )
 
-    # Header text (bold)
-    header = "<b>📋 All Options Summary — Across All Tickers</b>"
-
-    # Table header (fixed-width columns)
+    # Header
+    header = "<b>📋 All Options Summary — Across All Tickers</b>\n"
     table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*45
 
-    # Split long lists into 30-row chunks
+    # Split into chunks of 30 rows
     chunk_size = 30
     for i in range(0, len(summary_rows), chunk_size):
         chunk = summary_rows[i:i+chunk_size]
-        chunk_body = html.escape("\n".join(chunk))
-
-        # ✅ fixed spacing between <b> and <pre>, plus a newline before </pre>
-        msg = (
-            f"{header}\n\n"                    # <-- two newlines between header and table
-            f"<pre>{table_header}\n"           # start of monospace block
-            f"{chunk_body}\n</pre>"            # newline before </pre> for Telegram safety
-        )
-
+        chunk_body = "\n".join(chunk)
+        msg = header + "\n<pre>" + table_header + "\n" + chunk_body + "</pre>"
         send_telegram_message(msg)
 
 # ------------------ CURRENT OPEN POSITIONS ALERT (Sell Puts Only) ------------------
@@ -502,10 +492,8 @@ if top10_best_options:
         f"✅ Expiration: {best['Expiration Date']}",
         f"💲 Strike: ${best['Strike Price']:.2f}",
         f"💰 Bid: ${best['Bid Price']:.2f}",
-        f"🔺 Delta: {best['Delta']:.3f} | COP: {best['COP Short']*100:.1f}%",
+        f"🔺 Delta: {abs(best['Delta']):.3f} | COP: {best['COP Short']*100:.1f}%",
         f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_message("\n".join(msg_lines))
-
-
