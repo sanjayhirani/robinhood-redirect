@@ -313,24 +313,30 @@ def scan_ticker(ticker_raw, ticker_clean):
                 open_interest = int(md.get('open_interest') or 0)
                 volume = int(md.get('volume') or 0)
 
-                # safe strike -> dist calculation
+                # ---------------- SAFE STRIKE & DISTANCE CHECK ----------------
                 try:
                     strike_price = float(opt.get('strike_price'))
                 except Exception:
                     continue
                 
-                # Exclude options whose strike was hit in last `low_days` days
+                # Use last N days of actual lows (drop NaNs)
                 low_days = int(config.get("low_days", 30))
-                if (df['low'][-low_days:] <= strike_price).any():
+                recent_lows = df['low'].dropna().tail(low_days)
+                
+                # Exclude option if strike was hit in last low_days
+                if (recent_lows <= strike_price).any():
                     continue  # skip this option
                 
                 # avoid division by zero
                 if last_low == 0:
                     continue
+                
+                # Distance from last low (existing logic)
                 dist_from_low = (strike_price - last_low) / last_low
                 if dist_from_low < 0.01:
                     continue
                 
+                # Add to candidate puts
                 candidate_puts.append({
                     "Ticker": ticker_raw,
                     "TickerClean": ticker_clean,
@@ -344,7 +350,7 @@ def scan_ticker(ticker_raw, ticker_clean):
                     "Volume": volume
                 })
 
-        return candidate_puts
+return candidate_puts
 
     except Exception as e:
         # retain your existing behavior of notifying about ticker-specific exceptions
@@ -509,4 +515,5 @@ if eligible_options:
 else:
     # No eligible option found
     send_telegram_message("⚠️ No option meets COP ≥ 73% and Δ ≤ 0.25")
+
 
