@@ -505,34 +505,76 @@ else:
     # No eligible option found
     send_telegram_message("⚠️ No option meets COP ≥ 73% and Δ ≤ 0.25")
 
-# ------------------ 30-DAY LOW ALERT (yfinance) ------------------
+# ------------------ 30-DAY STATS ALERT WITH RSI & TREND EMOJI ------------------
 
-today = datetime.now().date()
-low_rows = []
+table_data = []
 
 for ticker_raw, ticker_clean in zip(TICKERS_RAW, TICKERS):
     try:
         stock = yf.Ticker(ticker_clean)
         hist = stock.history(period="30d", interval="1d")
-        if hist.empty or 'Low' not in hist.columns:
+        if hist.empty or not all(col in hist.columns for col in ['Low', 'High', 'Close']):
             continue
 
         low_30 = hist['Low'].min()
-        low_rows.append((ticker_raw, low_30))
+        high_30 = hist['High'].max()
+        close_now = hist['Close'][-1]
+
+        # Calculate RSI (14-day)
+        delta = hist['Close'].diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(14, min_periods=14).mean()
+        avg_loss = loss.rolling(14, min_periods=14).mean()
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        rsi_latest = rsi[-1] if not pd.isna(rsi[-1]) else None
+
+        # Determine RSI emoji
+        if isinstance(rsi_latest, float):
+            if rsi_latest < 30:
+                rsi_emoji = "📉"
+            elif rsi_latest > 70:
+                rsi_emoji = "📈"
+            else:
+                rsi_emoji = "⚪"
+        else:
+            rsi_emoji = "❓"
+
+        table_data.append({
+            "Ticker": ticker_raw,
+            "Current": close_now,
+            "30D Low": low_30,
+            "30D High": high_30,
+            "RSI14": rsi_latest,
+            "RSI Emoji": rsi_emoji
+        })
 
     except Exception as e:
-        low_rows.append((ticker_raw, f"Error: {e}"))
+        table_data.append({
+            "Ticker": ticker_raw,
+            "Current": "Err",
+            "30D Low": "Err",
+            "30D High": "Err",
+            "RSI14": "Err",
+            "RSI Emoji": "❓"
+        })
 
-# Format table for Telegram
-table_lines = ["<b>📉 30-Day Low Prices</b>", "-"*25]
-for t, low in low_rows:
-    if isinstance(low, float):
-        table_lines.append(f"{t:<6} | ${low:<.2f}")
-    else:
-        table_lines.append(f"{t:<6} | {low}")
+# Format table in fixed-width style for Telegram
+header = "<b>📊 30-Day Ticker Summary</b>\n<pre>"
+table_header = f"{'Tkr':<6}|{'Cur':<7}|{'30L':<7}|{'30H':<7}|{'RSI':<6}|{'Trnd':<5}\n" + "-"*50
+
+table_lines = [header + table_header]
+for row in table_data:
+    cur = f"${row['Current']:.2f}" if isinstance(row['Current'], float) else row['Current']
+    low = f"${row['30D Low']:.2f}" if isinstance(row['30D Low'], float) else row['30D Low']
+    high = f"${row['30D High']:.2f}" if isinstance(row['30D High'], float) else row['30D High']
+    rsi_val = f"{row['RSI14']:.1f}" if isinstance(row['RSI14'], float) else row['RSI14']
+    rsi_emoji = row['RSI Emoji']
+
+    table_lines.append(f"{row['Ticker']:<6}|{cur:<7}|{low:<7}|{high:<7}|{rsi_val:<6}|{rsi_emoji:<5}")
+
+table_lines.append("</pre>")
 
 # Send Telegram alert
-if low_rows:
-    send_telegram_message("\n".join(table_lines))
-else:
-    send_telegram_message("⚠️ Could not fetch 30-day lows for any tickers.")
+send_telegram_message("\n".join(table_lines))
