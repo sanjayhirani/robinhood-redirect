@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import yfinance as yf
 import re
 import io
+import html
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 
@@ -412,16 +413,25 @@ if all_options:
             f"{opt['Max Contracts']:<2}|${opt['Total Premium']:<5.0f}"
         )
 
-    # Header
-    header = "<b>📋 All Options Summary — Across All Tickers</b>\n"
+    # Header text (bold)
+    header = "<b>📋 All Options Summary — Across All Tickers</b>"
+
+    # Table header (fixed-width columns)
     table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*45
 
-    # Split into chunks of 30 rows
+    # Split long lists into 30-row chunks
     chunk_size = 30
     for i in range(0, len(summary_rows), chunk_size):
         chunk = summary_rows[i:i+chunk_size]
-        chunk_body = "\n".join(chunk)
-        msg = header + "\n<pre>" + table_header + "\n" + chunk_body + "\n</pre>"
+        chunk_body = html.escape("\n".join(chunk))
+
+        # ✅ fixed spacing between <b> and <pre>, plus a newline before </pre>
+        msg = (
+            f"{header}\n\n"                    # <-- two newlines between header and table
+            f"<pre>{table_header}\n"           # start of monospace block
+            f"{chunk_body}\n</pre>"            # newline before </pre> for Telegram safety
+        )
+
         send_telegram_message(msg)
 
 # ------------------ CURRENT OPEN POSITIONS ALERT (Sell Puts Only) ------------------
@@ -497,4 +507,5 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_message("\n".join(msg_lines))
+
 
