@@ -421,7 +421,7 @@ if all_options:
     for i in range(0, len(summary_rows), chunk_size):
         chunk = summary_rows[i:i+chunk_size]
         chunk_body = "\n".join(chunk)
-        msg = header + "\n<pre>" + table_header + "\n" + chunk_body + "</pre>"
+        msg = header + "\n<pre>" + table_header + "\n" + chunk_body + "\n</pre>"
         send_telegram_message(msg)
 
 # ------------------ CURRENT OPEN POSITIONS ALERT (Sell Puts Only) ------------------
@@ -497,3 +497,4 @@ if top10_best_options:
         f"💵 Buying Power: ${buying_power:,.2f}"
     ]
     send_telegram_message("\n".join(msg_lines))
+
