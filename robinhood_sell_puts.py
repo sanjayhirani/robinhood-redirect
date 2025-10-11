@@ -119,6 +119,43 @@ send_telegram_message("\n".join(summary_lines))
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
+# ------------------ 30-DAY MAJOR ECONOMIC EVENTS ALERT ------------------
+from datetime import datetime, timedelta
+
+today = datetime.now().date()
+cutoff = today + timedelta(days=30)
+
+# Hardcoded major events for the next 30 days (example)
+major_events = [
+    {"Date": "15-10-2025", "Event": "Consumer Price Index (CPI) Release"},
+    {"Date": "17-10-2025", "Event": "Producer Price Index (PPI) Release"},
+    {"Date": "20-10-2025", "Event": "Euro Area GDP Growth Rate"},
+    {"Date": "22-10-2025", "Event": "U.S. Federal Reserve Meeting Minutes"},
+    {"Date": "25-10-2025", "Event": "Durable Goods Orders Report"},
+    {"Date": "28-10-2025", "Event": "Bank of England Interest Rate Decision"},
+    {"Date": "30-10-2025", "Event": "U.S. Gross Domestic Product (GDP) Report"},
+    {"Date": "01-11-2025", "Event": "U.S. Non-Farm Payrolls & Unemployment Rate"},
+]
+
+# Filter events within next 30 days
+major_events = [e for e in major_events if today <= datetime.strptime(e["Date"], "%d-%m-%Y").date() <= cutoff]
+
+# Format table for Telegram in fixed-width style, max 50 characters
+if major_events:
+    header = "<b>📅 Major Events / Macro Calendar (Next 30 Days)</b>\n<pre>"
+    table_header = f"{'Date':<12}|{'Event':<37}\n" + "-"*50
+
+    table_lines = [header + table_header]
+    for e in major_events:
+        # truncate event name to 37 chars to fit 50-character line with date
+        event_name = e['Event'] if len(e['Event']) <= 37 else e['Event'][:34] + "..."
+        table_lines.append(f"{e['Date']:<12}|{event_name:<37}")
+    table_lines.append("</pre>")
+
+    send_telegram_message("\n".join(table_lines))
+else:
+    send_telegram_message("⚠️ No major events found in the next 30 days.")
+
 # ------------------ OPTIONS SCAN (PARALLELIZED WITH THROTTLE) ------------------
 all_options = []
 
