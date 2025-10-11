@@ -223,17 +223,17 @@ def scan_ticker(ticker_raw, ticker_clean):
                 market_data_list = None
 
             if not market_data_list:
-            market_data_list = []
-            for oid in option_ids:
-                try:
-                    md = r.options.get_option_market_data_by_id(oid)
-                    if isinstance(md, list):
-                        market_data_list.extend(md)
-                    else:
-                        market_data_list.append(md)
-                except Exception as e:
-                    print(f"Failed to fetch {oid}: {e}")
-                time.sleep(0.05)
+                market_data_list = []
+                for oid in option_ids:
+                    try:
+                        md = r.options.get_option_market_data_by_id(oid)
+                        if isinstance(md, list):
+                            market_data_list.extend(md)
+                        else:
+                            market_data_list.append(md)
+                    except Exception as e:
+                        print(f"Failed to fetch {oid}: {e}")
+                    time.sleep(0.05)
 
             else:
                 if isinstance(market_data_list, dict):
