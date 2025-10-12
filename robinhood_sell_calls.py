@@ -4,7 +4,6 @@ import requests
 import robin_stocks.robinhood as r
 import pandas as pd
 import numpy as np
-import yaml
 from datetime import datetime, timedelta
 import re
 import time
@@ -19,6 +18,8 @@ def ensure_package(pkg_name):
 
 for pkg in ["pandas", "numpy", "requests", "robin_stocks", "PyYAML"]:
     ensure_package(pkg)
+
+import yaml   # <-- move this here, after auto-install
 
 # ------------------ LOAD CONFIG ------------------
 with open("config.yaml", encoding="utf-8") as f:
