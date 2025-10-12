@@ -306,3 +306,27 @@ try:
 
 except Exception as e:
     send_telegram_message(f"⚠️ Error generating current call positions alert: {e}")
+
+# ------------------ BEST COVERED CALL ALERT ------------------
+eligible_calls = [
+    c for c in all_calls
+    if c['COP Short'] >= 0.73 and abs(c['Delta']) <= 0.25
+]
+
+if eligible_calls:
+    best = max(eligible_calls, key=lambda x: x['Bid Price']*100*x['COP Short'])
+    max_contracts = max(1, int(float(r.profiles.load_account_profile().get('buying_power', 0)) // (best['Strike Price']*100)))
+    total_premium = best['Bid Price']*100*max_contracts
+
+    msg_lines = [
+        "🔥 <b>Best Covered Call</b>",
+        f"📊 {best['Ticker']} current: ${best['Current Price']:.2f}",
+        f"✅ Expiration: {best['Expiration Date']}",
+        f"💲 Strike: ${best['Strike Price']:.2f}",
+        f"💰 Bid: ${best['Bid Price']:.2f}",
+        f"🔺 Delta: {abs(best['Delta']):.3f} | COP: {best['COP Short']*100:.1f}%",
+        f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}"
+    ]
+    send_telegram_message("\n".join(msg_lines))
+else:
+    send_telegram_message("⚠️ No eligible call meets COP ≥ 73% and Δ ≤ 0.25")
