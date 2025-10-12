@@ -1,23 +1,23 @@
-# robinhood_sell_calls_main_full.py
+# robinhood_sell_calls_final.py
 
 import os
 import requests
 import robin_stocks.robinhood as r
-import yfinance as yf
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import io
 from datetime import datetime, timedelta
 
-# ------------------ CONFIG ------------------
-TICKERS = ["OPEN"]  # tickers you own
-TEST_MODE = True
-MIN_PRICE = 0.10
-CANDLE_WIDTH = 0.6
-LOW_DAYS = 14
-EXPIRY_LIMIT_DAYS = 21
-NUM_CALLS = 3  # top strikes per ticker
+import yaml
+import time
+
+# ------------------ LOAD CONFIG ------------------
+with open("config.yaml", encoding="utf-8") as f:
+    config = yaml.safe_load(f)
+
+MIN_PRICE = float(config.get("min_price", 0.10))
+LOW_DAYS = int(config.get("low_days", 30))
+EXPIRY_LIMIT_DAYS = int(config.get("expiry_limit_days", 30))
+NUM_CALLS = int(config.get("num_calls", 3))
+MAX_WORKERS = int(config.get("max_workers", 5))
 
 # ------------------ SECRETS ------------------
 USERNAME = os.environ["RH_USERNAME"]
@@ -25,131 +25,75 @@ PASSWORD = os.environ["RH_PASSWORD"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-# ------------------ TELEGRAM ------------------
-def send_telegram_photo(buf, caption):
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
-        files={'photo': buf},
-        data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
-    )
-
+# ------------------ TELEGRAM UTILITIES ------------------
 def send_telegram_message(msg):
     requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     )
 
-# ------------------ PLOTTING ------------------
-def plot_candlestick(df, current_price, last_14_high, selected_strikes=None, exp_date=None, show_strikes=True):
-    fig, ax = plt.subplots(figsize=(12,6))
-    fig.patch.set_facecolor('black')
-    ax.set_facecolor('black')
-    for i in range(len(df)):
-        color = 'lime' if df['close'].iloc[i] >= df['open'].iloc[i] else 'red'
-        ax.add_patch(plt.Rectangle(
-            (mdates.date2num(df.index[i])-CANDLE_WIDTH/2, min(df['open'].iloc[i], df['close'].iloc[i])),
-            CANDLE_WIDTH,
-            abs(df['close'].iloc[i]-df['open'].iloc[i]),
-            color=color
-        ))
-        ax.plot([mdates.date2num(df.index[i]), mdates.date2num(df.index[i])],
-                 [df['low'].iloc[i], df['high'].iloc[i]], color=color, linewidth=1)
-    ax.axhline(current_price, color='magenta', linestyle='--', linewidth=1.5, label=f'Current: ${current_price:.2f}')
-    ax.axhline(last_14_high, color='yellow', linestyle='--', linewidth=2, label=f'14-day High: ${last_14_high:.2f}')
-    if show_strikes and selected_strikes:
-        for strike in selected_strikes:
-            ax.axhline(strike, color='cyan', linestyle='--', linewidth=1.5)
-    ax.set_ylabel('Price ($)', color='white')
-    ax.tick_params(colors='white')
-    ax.grid(True, color='gray', linestyle='--', alpha=0.3)
-    ax.legend(facecolor='black', edgecolor='white', labelcolor='white')
-    ax.xaxis.set_major_locator(mdates.DayLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m'))
-    fig.autofmt_xdate(rotation=45)
-    plt.tight_layout()
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', facecolor='black')
-    buf.seek(0)
-    plt.close()
-    return buf
-
 # ------------------ LOGIN ------------------
 r.login(USERNAME, PASSWORD)
 today = datetime.now().date()
 cutoff = today + timedelta(days=EXPIRY_LIMIT_DAYS)
 
-# ------------------ TEST MODE: MOCK OWNED POSITIONS ------------------
-mock_owned = {t: 100 for t in TICKERS}
+# ------------------ GET TICKERS WITH ≥100 SHARES ------------------
+owned_positions = r.positions.get_open_stock_positions()
+tickers = []
+ticker_data = {}  # store current price & instrument id
 
-# ------------------ MAIN ------------------
-safe_tickers = []
-risky_msgs = []
+for pos in owned_positions:
+    if pos.get("instrument") and pos.get("quantity"):
+        qty = float(pos["quantity"] or 0)
+        if qty >= 100:
+            instr = r.helper.request_get(pos["instrument"])
+            symbol = instr.get("symbol")
+            if symbol:
+                tickers.append(symbol)
+                ticker_data[symbol] = {"quantity": qty, "instrument_id": instr.get("id")}
 
-for TICKER in TICKERS:
+if not tickers:
+    send_telegram_message("⚠️ No tickers with ≥100 shares found.")
+    exit()
+
+# ------------------ SCAN EACH TICKER FOR COVERED CALLS ------------------
+all_calls = []
+
+for ticker in tickers:
     try:
-        shares_owned = mock_owned.get(TICKER, 0)
-        if shares_owned < 100:
-            risky_msgs.append(f"⚠️ {TICKER} has less than 100 shares.")
-            continue
-        safe_tickers.append(TICKER)
-    except:
-        risky_msgs.append(f"⚠️ Could not verify {TICKER}")
-
-# ------------------ SEND RISK SUMMARY ------------------
-safe_count = len(safe_tickers)
-risky_count = len(risky_msgs)
-summary_lines = []
-if risky_msgs:
-    summary_lines.append("⚠️ <b>Risky Tickers</b>\n" + "\n".join(risky_msgs))
-else:
-    summary_lines.append("⚠️ <b>No risky tickers found 🎉</b>")
-
-if safe_tickers:
-    safe_bold = [f"<b>{t}</b>" for t in safe_tickers]
-    safe_rows = [", ".join(safe_bold[i:i+4]) for i in range(0, len(safe_bold), 4)]
-    summary_lines.append("✅ <b>Safe Tickers</b>\n" + "\n".join(safe_rows))
-
-summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
-send_telegram_message("\n".join(summary_lines))
-
-# ------------------ PROCESS EACH SAFE TICKER ------------------
-for TICKER in safe_tickers:
-    try:
-        current_price = float(r.stocks.get_latest_price(TICKER)[0])
-        rh_url = f"https://robinhood.com/stocks/{TICKER}"
-
-        # ------------------ Historicals ------------------
-        historicals = r.stocks.get_stock_historicals(TICKER, interval='day', span='month', bounds='regular')
+        current_price = float(r.stocks.get_latest_price(ticker)[0])
+        historicals = r.stocks.get_stock_historicals(
+            ticker, interval='day', span='month', bounds='regular'
+        )
         df = pd.DataFrame(historicals)
+        if df.empty or 'begins_at' not in df.columns:
+            continue
         df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
         df.set_index('begins_at', inplace=True)
-        df = df[['open_price','close_price','high_price','low_price','volume']].astype(float)
-        df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
-        all_days = pd.date_range(start=df.index.min(), end=df.index.max(), freq='B')
-        df = df.reindex(all_days)
-        df.index = df.index.tz_localize(None)
-        df['close'] = df['close'].ffill()
-        df['open'] = df['open'].fillna(df['close'])
-        df['high'] = df['high'].fillna(df[['open','close']].max(axis=1))
-        df['low'] = df['low'].fillna(df[['open','close']].min(axis=1))
-        df['volume'] = df['volume'].fillna(0)
+        df.rename(columns={'open_price':'open','close_price':'close',
+                           'high_price':'high','low_price':'low'}, inplace=True)
+        df = df.asfreq('B').ffill()
+        last_low = df['low'][-LOW_DAYS:].min()
+        if last_low <= 0:
+            continue
 
-        month_high = df['close'].max()
-        last_14_high = df['high'][-LOW_DAYS:].max()
-        distance_from_high = month_high - current_price
-        distance_pct = distance_from_high / month_high
+        # Find tradable calls
+        all_options = r.options.find_tradable_options(ticker, optionType="call")
+        if not all_options:
+            continue
+        if isinstance(all_options, dict):
+            all_options = all_options.get('results', [])
 
-        # ------------------ Options ------------------
-        all_calls = r.options.find_tradable_options(TICKER, optionType="call")
-        exp_dates = sorted(set([opt['expiration_date'] for opt in all_calls]))
+        # Expiration filter
+        exp_dates = sorted({opt['expiration_date'] for opt in all_options if opt.get('expiration_date')})
         exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff]
 
         candidate_calls = []
 
         for exp_date in exp_dates:
-            calls_for_exp = [opt for opt in all_calls if opt['expiration_date'] == exp_date]
+            calls_for_exp = [opt for opt in all_options if opt['expiration_date'] == exp_date]
             strikes_above = sorted([float(opt['strike_price']) for opt in calls_for_exp if float(opt['strike_price']) > current_price])
-            chosen_strikes = strikes_above[2:5]  # skip first 2, take next 3
+            chosen_strikes = strikes_above[2:5] if len(strikes_above) > 2 else strikes_above
 
             for opt in calls_for_exp:
                 strike = float(opt['strike_price'])
@@ -162,50 +106,68 @@ for TICKER in safe_tickers:
                 cop_short = float(md.get("chance_of_profit_short") or 0.0)
                 if bid_price >= MIN_PRICE:
                     candidate_calls.append({
-                        "Ticker": TICKER,
+                        "Ticker": ticker,
                         "Current Price": current_price,
                         "Expiration Date": exp_date,
                         "Strike Price": strike,
                         "Bid Price": bid_price,
                         "Delta": delta,
                         "COP Short": cop_short,
-                        "Month High": month_high,
-                        "Distance From High %": distance_pct,
-                        "URL": rh_url
+                        "Distance From Low": (strike - last_low)/last_low
                     })
-
-        # ------------------ Individual alert (top 3) ------------------
-        selected_calls = sorted(candidate_calls, key=lambda x: x['COP Short'], reverse=True)[:NUM_CALLS]
-        if selected_calls:
-            msg_lines = [f"📊 <a href='{rh_url}'>{TICKER}</a> current: ${current_price:.2f}",
-                         f"💹 1M High: ${month_high:.2f}\n"]
-            for c in selected_calls:
-                msg_lines.append(
-                    f"Expiration: {c['Expiration Date']}\n"
-                    f"Strike: ${c['Strike Price']}\n"
-                    f"Bid Price: ${c['Bid Price']:.2f}\n"
-                    f"Delta: {c['Delta']:.3f}\n"
-                    f"Chance of Profit (Short): {c['COP Short']*100:.2f}%\n"
-                    f"Distance from 1M High: {c['Distance From High %']*100:.2f}%\n"
-                    "-------------------"
-                )
-            buf = plot_candlestick(df, current_price, last_14_high, show_strikes=False)
-            send_telegram_photo(buf, "\n".join(msg_lines))
-
-        # ------------------ Best alert ------------------
-        if selected_calls:
-            best = max(selected_calls, key=lambda x: x['COP Short'])
-            msg_lines = [
-                "🔥 <b>Best Covered Call</b>:",
-                f"📊 <a href='{best['URL']}'>{best['Ticker']}</a> current: ${best['Current Price']:.2f}",
-                f"✅ Exp: {best['Expiration Date']} | 💲 Strike: {best['Strike Price']}",
-                f"💰 Bid: ${best['Bid Price']:.2f} | 🔺 Delta: {best['Delta']:.3f}",
-                f"🎯 COP Short: {best['COP Short']*100:.2f}%",
-                f"📉 Dist. from 1M High: {best['Distance From High %']*100:.2f}%"
-            ]
-            buf = plot_candlestick(df, best['Current Price'], last_14_high,
-                                   [best['Strike Price']], best['Expiration Date'], show_strikes=True)
-            send_telegram_photo(buf, "\n".join(msg_lines))
+        all_calls.extend(candidate_calls)
 
     except Exception as e:
-        send_telegram_message(f"⚠️ Error on {TICKER}: {e}")
+        send_telegram_message(f"⚠️ Error on {ticker}: {e}")
+
+# ------------------ FILTER CALLS ------------------
+filtered_calls = [c for c in all_calls if abs(c['Delta']) <= 0.3 and c['COP Short'] >= 0.7]
+
+# ------------------ SUMMARY ------------------
+if filtered_calls:
+    summary_rows = []
+    for c in sorted(filtered_calls, key=lambda x: x['COP Short'], reverse=True):
+        summary_rows.append(
+            f"{c['Ticker']} | Exp: {c['Expiration Date']} | Strike: {c['Strike Price']} | "
+            f"Bid: {c['Bid Price']:.2f} | Δ: {abs(c['Delta']):.2f} | COP: {c['COP Short']*100:.1f}%"
+        )
+    header = "<b>📋 Top Covered Calls</b>\n"
+    send_telegram_message(header + "\n" + "\n".join(summary_rows))
+else:
+    send_telegram_message("⚠️ No covered calls meet Δ ≤ 0.3 and COP ≥ 70%")
+
+# ------------------ CURRENT OPEN CALL POSITIONS ------------------
+try:
+    positions = r.options.get_open_option_positions()
+    call_positions = []
+    for pos in positions:
+        qty = float(pos.get("quantity") or 0)
+        if qty == 0:
+            continue
+        instrument = r.helper.request_get(pos.get("option"))
+        if instrument.get("type") != "call":
+            continue
+        ticker = instrument.get("chain_symbol")
+        strike = float(instrument.get("strike_price"))
+        exp_date = instrument.get("expiration_date")
+        avg_price = float(pos.get("average_price") or 0)
+        md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
+        mark_price = float(md.get("mark_price") or 0.0)
+        pnl_now = (mark_price - avg_price) * abs(int(qty)) * 100
+        call_positions.append(
+            f"📌 <b>{ticker}</b> | Exp: {exp_date} | Strike: {strike:.2f} | Qty: {int(abs(qty))} | Current PnL: ${pnl_now:.2f}"
+        )
+    if call_positions:
+        send_telegram_message("<b>📋 Current Open Call Positions</b>\n" + "\n".join(call_positions))
+except Exception as e:
+    send_telegram_message(f"⚠️ Error generating current call positions alert: {e}")
+
+# ------------------ BEST COVERED CALL ALERT ------------------
+eligible_calls = [c for c in filtered_calls if abs(c['Delta']) <= 0.25 and c['COP Short'] >= 0.73]
+if eligible_calls:
+    best = max(eligible_calls, key=lambda x: x['Bid Price']*100*x['COP Short'])
+    send_telegram_message(
+        f"🔥 <b>Best Covered Call</b>\n"
+        f"{best['Ticker']} | Exp: {best['Expiration Date']} | Strike: {best['Strike Price']:.2f} | "
+        f"Bid: {best['Bid Price']:.2f} | Δ: {abs(best['Delta']):.2f} | COP: {best['COP Short']*100:.1f}%"
+    )
