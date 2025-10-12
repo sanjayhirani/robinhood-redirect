@@ -1,23 +1,18 @@
-# robinhood_sell_calls_final.py
-
 import os
 import requests
 import robin_stocks.robinhood as r
 import pandas as pd
-from datetime import datetime, timedelta
-
 import yaml
-import time
+from datetime import datetime, timedelta
 
 # ------------------ LOAD CONFIG ------------------
 with open("config.yaml", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
 MIN_PRICE = float(config.get("min_price", 0.10))
-LOW_DAYS = int(config.get("low_days", 30))
-EXPIRY_LIMIT_DAYS = int(config.get("expiry_limit_days", 30))
+LOW_DAYS = int(config.get("low_days", 14))
+EXPIRY_LIMIT_DAYS = int(config.get("expiry_limit_days", 21))
 NUM_CALLS = int(config.get("num_calls", 3))
-MAX_WORKERS = int(config.get("max_workers", 5))
 
 # ------------------ SECRETS ------------------
 USERNAME = os.environ["RH_USERNAME"]
@@ -25,7 +20,7 @@ PASSWORD = os.environ["RH_PASSWORD"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-# ------------------ TELEGRAM UTILITIES ------------------
+# ------------------ TELEGRAM ------------------
 def send_telegram_message(msg):
     requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
