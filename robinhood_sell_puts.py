@@ -119,6 +119,53 @@ send_telegram_message("\n".join(summary_lines))
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
+# ------------------ CURRENT OPEN POSITIONS ALERT (Sell Puts Only) ------------------
+try:
+    positions = r.options.get_open_option_positions()
+    if positions:
+        msg_lines = ["📋 <b>Current Open Positions</b>\n"]
+
+        for pos in positions:
+            qty_raw = float(pos.get("quantity") or 0)
+            if qty_raw == 0:
+                continue
+
+            contracts = abs(int(qty_raw))
+
+            instrument = r.helper.request_get(pos.get("option"))
+            ticker = instrument.get("chain_symbol")
+            strike = float(instrument.get("strike_price"))
+            exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
+
+            avg_price_raw = float(pos.get("average_price") or 0.0)
+            md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
+            md_mark_price = float(md.get("mark_price") or 0.0)
+            mark_per_contract = md_mark_price * 100
+
+            # PnL calculation for sell puts
+            orig_pnl = abs(avg_price_raw) * contracts
+            pnl_now = orig_pnl - (mark_per_contract * contracts)
+
+            # Emoji based on 70% of original PnL
+            pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
+
+            # Format each position with emojis per line
+            msg_lines.extend([
+                f"📌 <b>{ticker}</b> | 📉 Sell Put",
+                f"💲 Strike: ${strike:.2f}",
+                f"✅ Exp: {exp_date}",
+                f"📦 Qty: {contracts}",
+                f"📊 Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}",
+                f"💰 Full Premium: ${orig_pnl:.2f}",
+                f"💵 Current Profit: {pnl_emoji} ${pnl_now:.2f}",
+                "────────────────────"
+            ])
+
+        send_telegram_message("\n".join(msg_lines))
+
+except Exception as e:
+    send_telegram_message(f"Error generating current positions alert: {e}")
+
 # ------------------ OPTIONS SCAN (PARALLELIZED WITH THROTTLE) ------------------
 all_options = []
 
@@ -435,53 +482,6 @@ if all_options:
         msg = header + "\n<pre>" + table_header + "\n" + chunk_body + "</pre>"
         send_telegram_message(msg)
 
-# ------------------ CURRENT OPEN POSITIONS ALERT (Sell Puts Only) ------------------
-try:
-    positions = r.options.get_open_option_positions()
-    if positions:
-        msg_lines = ["📋 <b>Current Open Positions</b>\n"]
-
-        for pos in positions:
-            qty_raw = float(pos.get("quantity") or 0)
-            if qty_raw == 0:
-                continue
-
-            contracts = abs(int(qty_raw))
-
-            instrument = r.helper.request_get(pos.get("option"))
-            ticker = instrument.get("chain_symbol")
-            strike = float(instrument.get("strike_price"))
-            exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
-
-            avg_price_raw = float(pos.get("average_price") or 0.0)
-            md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
-            md_mark_price = float(md.get("mark_price") or 0.0)
-            mark_per_contract = md_mark_price * 100
-
-            # PnL calculation for sell puts
-            orig_pnl = abs(avg_price_raw) * contracts
-            pnl_now = orig_pnl - (mark_per_contract * contracts)
-
-            # Emoji based on 70% of original PnL
-            pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
-
-            # Format each position with emojis per line
-            msg_lines.extend([
-                f"📌 <b>{ticker}</b> | 📉 Sell Put",
-                f"💲 Strike: ${strike:.2f}",
-                f"✅ Exp: {exp_date}",
-                f"📦 Qty: {contracts}",
-                f"📊 Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}",
-                f"💰 Full Premium: ${orig_pnl:.2f}",
-                f"💵 Current Profit: {pnl_emoji} ${pnl_now:.2f}",
-                "────────────────────"
-            ])
-
-        send_telegram_message("\n".join(msg_lines))
-
-except Exception as e:
-    send_telegram_message(f"Error generating current positions alert: {e}")
-
 # Prepare list for best alert based on all options
 top10_best_options = sorted(all_options, key=lambda x: x['Total Premium'], reverse=True)[:10]
 
@@ -728,4 +728,5 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
