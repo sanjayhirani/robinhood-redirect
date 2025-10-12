@@ -579,9 +579,8 @@ table_lines.append("</pre>")
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
 
-# ------------------ OWNED TICKERS SELL CALLS SUMMARY ------------------
+# ------------------ OWNED TICKERS SELL CALLS SUMMARY (SORTED BY TOTAL PREMIUM) ------------------
 try:
-    # Get tickers with ≥100 shares
     holdings = r.build_holdings()
     owned_tickers = [(symbol.upper(), symbol.upper()) for symbol, data in holdings.items() if float(data.get("quantity", 0)) >= 100]
 
@@ -589,6 +588,7 @@ try:
         send_telegram_message("⚠️ No owned tickers with ≥100 shares for sell calls.")
     else:
         all_calls = []
+        buying_power = float(r.profiles.load_account_profile().get('buying_power', 0))
 
         for ticker_raw, ticker_clean in owned_tickers:
             try:
@@ -596,7 +596,6 @@ try:
                 if not calls:
                     continue
 
-                # Normalize dict vs list
                 if isinstance(calls, dict):
                     maybe = calls.get('results') or calls.get('options') or None
                     if isinstance(maybe, list):
@@ -614,7 +613,6 @@ try:
                     if not exp_date:
                         continue
                     exp_dt = datetime.strptime(exp_date, "%Y-%m-%d").date()
-                    # Only next 30 days
                     if not (today <= exp_dt <= cutoff):
                         continue
 
@@ -622,18 +620,20 @@ try:
                     if not oid:
                         continue
 
-                    # Fetch market data
                     md_list = r.options.get_option_market_data_by_id(oid)
                     if not md_list:
                         continue
                     md = md_list[0] if isinstance(md_list, list) else md_list
 
                     bid_price = float(md.get("bid_price") or md.get("mark_price") or 0)
+                    if bid_price < 0.10:
+                        continue  # Filter out low bids
+
                     delta = float(md.get("delta") or 0)
                     cop_short = float(md.get("chance_of_profit_short") or 0)
-                    open_interest = int(md.get("open_interest") or 0)
-                    volume = int(md.get("volume") or 0)
                     strike = float(opt.get("strike_price") or 0)
+                    max_contracts = max(1, int(buying_power // (strike*100)))
+                    total_premium = bid_price * 100 * max_contracts
 
                     all_calls.append({
                         "Ticker": ticker_raw,
@@ -642,8 +642,8 @@ try:
                         "Bid": bid_price,
                         "Delta": delta,
                         "COP Short": cop_short,
-                        "Volume": volume,
-                        "Open Interest": open_interest
+                        "Max Contracts": max_contracts,
+                        "Total Premium": total_premium
                     })
 
             except Exception as e:
@@ -653,17 +653,21 @@ try:
         eligible_calls = [c for c in all_calls if abs(c["Delta"]) <= 0.3 and c["COP Short"] >= 0.7]
 
         if eligible_calls:
-            # Format all calls summary
+            # Sort descending by Total Premium
+            eligible_calls = sorted(eligible_calls, key=lambda x: x['Total Premium'], reverse=True)
+
+            # Format all calls summary (matching sell puts table)
             summary_rows = []
             for c in eligible_calls:
+                exp_md = c['Expiration'][5:]  # MM-DD
                 summary_rows.append(
-                    f"{c['Ticker']:<5}|{c['Expiration'][5:]}|{c['Strike']:<5.2f}|"
+                    f"{c['Ticker']:<5}|{exp_md:<5}|{c['Strike']:<6.2f}|"
                     f"{c['Bid']:<4.2f}|{abs(c['Delta']):<5.2f}|{c['COP Short']*100:<5.1f}%|"
-                    f"{c['Volume']:<5}|{c['Open Interest']:<5}"
+                    f"{c['Max Contracts']:<2}|${c['Total Premium']:<5.0f}"
                 )
 
             header = "<b>📋 All Sell Calls Summary — Owned Tickers</b>\n"
-            table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<5}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Vol':<5}|{'OI':<5}\n" + "-"*50
+            table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*50
 
             chunk_size = 30
             for i in range(0, len(summary_rows), chunk_size):
@@ -673,11 +677,7 @@ try:
                 send_telegram_message(msg)
 
             # ------------------ BEST SELL CALL ALERT ------------------
-            buying_power = float(r.profiles.load_account_profile().get('buying_power', 0))
-            best_call = max(eligible_calls, key=lambda x: x['Bid']*100*max(1, int(buying_power/100/x['Strike'])))
-            max_contracts = max(1, int(buying_power // (best_call['Strike']*100)))
-            total_premium = best_call['Bid']*100*max_contracts
-
+            best_call = eligible_calls[0]  # top after sorting
             msg_lines = [
                 "🔥 <b>Best Sell Call</b>",
                 "",
@@ -685,7 +685,7 @@ try:
                 f"✅ Expiration: {best_call['Expiration']}",
                 f"💰 Bid: ${best_call['Bid']:.2f}",
                 f"🔺 Delta: {abs(best_call['Delta']):.3f} | COP: {best_call['COP Short']*100:.1f}%",
-                f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
+                f"📝 Max Contracts: {best_call['Max Contracts']} | Total Premium: ${best_call['Total Premium']:.2f}",
                 f"💵 Buying Power: ${buying_power:,.2f}"
             ]
             send_telegram_message("\n".join(msg_lines))
