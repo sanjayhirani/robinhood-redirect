@@ -157,19 +157,23 @@ def scan_ticker(ticker_raw, ticker_clean):
             if not option_ids:
                 continue
 
-            market_data_list = []
+            market_data_map = {}
             for oid in option_ids:
                 try:
                     md_resp = r.options.get_option_market_data_by_id(oid)
                     if isinstance(md_resp, list):
-                        market_data_list.append(md_resp[0])
+                        market_data_map[oid] = md_resp[0]
                     else:
-                        market_data_list.append(md_resp)
+                        market_data_map[oid] = md_resp
                 except:
                     continue
                 time.sleep(0.05)
 
-            for opt, md in zip(calls_for_exp, market_data_list):
+            for opt in calls_for_exp:
+                oid = opt.get('id')
+                if oid not in market_data_map:
+                    continue
+                md = market_data_map[oid]
                 try:
                     strike_price = float(opt.get('strike_price'))
                     bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
@@ -224,7 +228,6 @@ if all_calls:
 
     top_tickers = sorted(ticker_best.values(), key=lambda x: (x['score'], x['COP Short']), reverse=True)[:10]
 
-    # Format text-only summary
     summary_rows = []
     for opt in top_tickers:
         summary_rows.append(
@@ -232,37 +235,10 @@ if all_calls:
             f"Bid: {opt['Bid Price']:.2f} | Δ: {abs(opt['Delta']):.2f} | COP: {opt['COP Short']*100:.1f}%"
         )
 
-    header = "<b>📋 Top Covered Calls</b>\n"
-    send_telegram_message(header + "\n" + "\n".join(summary_rows))
-
-    # ------------------ TEXT TABLE FOR ALL ELIGIBLE CALLS ------------------
-    eligible_calls = [c for c in all_calls if c['COP Short'] >= 0.73 and abs(c['Delta']) <= 0.25]
-    if eligible_calls:
-        best_call = max(eligible_calls, key=lambda x: x['COP Short'])
-
-        table_lines = ["<b>📋 Eligible Covered Calls</b>\n"]
-        table_lines.append(f"{'Tkr':<6}|{'Exp':<10}|{'Strike':<7}|{'Bid':<6}|{'Δ':<6}|{'COP%':<6}")
-        table_lines.append("-"*45)
-
-        for c in sorted(eligible_calls, key=lambda x: x['COP Short'], reverse=True):
-            tkr = c['Ticker']
-            exp = c['Expiration Date']
-            strike = f"{c['Strike Price']:.2f}"
-            bid = f"{c['Bid Price']:.2f}"
-            delta = f"{abs(c['Delta']):.2f}"
-            cop = f"{c['COP Short']*100:.1f}%"
-
-            line = f"{tkr:<6}|{exp:<10}|{strike:<7}|{bid:<6}|{delta:<6}|{cop:<6}"
-
-            # Highlight best call in bold
-            if c['Ticker'] == best_call['Ticker'] and c['Strike Price'] == best_call['Strike Price'] and c['Expiration Date'] == best_call['Expiration Date']:
-                line = f"<b>{line}</b>"
-
-            table_lines.append(line)
-
-        send_telegram_message("\n".join(table_lines))
+    send_telegram_message("<b>📋 Top Covered Calls</b>\n" + "\n".join(summary_rows))
 else:
     send_telegram_message("⚠️ No covered calls meet Δ ≤ 0.3 and COP ≥ 70%")
+
 # ------------------ CURRENT OPEN CALL POSITIONS ------------------
 try:
     positions = r.options.get_open_option_positions()
@@ -274,7 +250,6 @@ try:
                 continue
 
             contracts = abs(int(qty_raw))
-
             instrument = r.helper.request_get(pos.get("option"))
             ticker = instrument.get("chain_symbol")
             strike = float(instrument.get("strike_price"))
@@ -285,10 +260,8 @@ try:
             md_mark_price = float(md.get("mark_price") or 0.0)
             mark_per_contract = md_mark_price * 100
 
-            # PnL calculation for sell calls (short calls)
             orig_pnl = abs(avg_price_raw) * contracts
             pnl_now = orig_pnl - (mark_per_contract * contracts)
-
             pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
 
             msg_lines.extend([
@@ -301,17 +274,12 @@ try:
                 f"💵 Current Profit: {pnl_emoji} ${pnl_now:.2f}",
                 "────────────────────"
             ])
-
         send_telegram_message("\n".join(msg_lines))
-
 except Exception as e:
     send_telegram_message(f"⚠️ Error generating current call positions alert: {e}")
 
 # ------------------ BEST COVERED CALL ALERT ------------------
-eligible_calls = [
-    c for c in all_calls
-    if c['COP Short'] >= 0.73 and abs(c['Delta']) <= 0.25
-]
+eligible_calls = [c for c in all_calls if c['COP Short'] >= 0.73 and abs(c['Delta']) <= 0.25]
 
 if eligible_calls:
     best = max(eligible_calls, key=lambda x: x['Bid Price']*100*x['COP Short'])
