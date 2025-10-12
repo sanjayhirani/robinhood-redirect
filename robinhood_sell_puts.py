@@ -579,212 +579,119 @@ table_lines.append("</pre>")
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
 
-# ------------------ SELL CALL SCAN FOR OWNED STOCKS (≥100 SHARES) ------------------
-
+# ------------------ OWNED TICKERS SELL CALLS SUMMARY ------------------
 try:
-    # Fetch positions
-    stock_positions = r.build_holdings()
-    owned_tickers = []
-    for symbol, data in stock_positions.items():
-        try:
-            qty = float(data.get("quantity", 0))
-            if qty >= 100:
-                owned_tickers.append((symbol.upper(), symbol.upper()))
-        except:
-            continue
+    # Get tickers with ≥100 shares
+    holdings = r.build_holdings()
+    owned_tickers = [(symbol.upper(), symbol.upper()) for symbol, data in holdings.items() if float(data.get("quantity", 0)) >= 100]
 
     if not owned_tickers:
-        send_telegram_message("⚠️ No tickers found with ≥100 shares for covered call scan.")
+        send_telegram_message("⚠️ No owned tickers with ≥100 shares for sell calls.")
     else:
-        all_call_options = []
-        today = datetime.now().date()
-        cutoff = today + timedelta(days=config.get("expiry_limit_days", 30))
+        all_calls = []
 
-        def scan_sell_call(ticker_raw, ticker_clean):
-            """Scan sell call options for tickers you own 100+ shares of."""
-            ticker_results = []
+        for ticker_raw, ticker_clean in owned_tickers:
             try:
-                latest_price = r.stocks.get_latest_price(ticker_clean)
-                if not latest_price or latest_price[0] is None:
-                    return []
-                current_price = float(latest_price[0])
+                calls = r.options.find_tradable_options(ticker_clean, optionType="call")
+                if not calls:
+                    continue
 
-                all_calls = r.options.find_tradable_options(ticker_clean, optionType="call")
-                if not all_calls:
-                    return []
-
-                # Normalize possible dict responses
-                if isinstance(all_calls, dict):
-                    maybe = all_calls.get('results') or all_calls.get('options') or None
+                # Normalize dict vs list
+                if isinstance(calls, dict):
+                    maybe = calls.get('results') or calls.get('options') or None
                     if isinstance(maybe, list):
-                        all_calls = maybe
+                        calls = maybe
                     else:
-                        for v in all_calls.values():
+                        for v in calls.values():
                             if isinstance(v, list):
-                                all_calls = v
+                                calls = v
                                 break
-                if not isinstance(all_calls, list):
-                    return []
+                if not isinstance(calls, list):
+                    continue
 
-                exp_dates = sorted({opt.get('expiration_date') for opt in all_calls if opt.get('expiration_date')})
-                exp_dates = [d for d in exp_dates if today <= datetime.strptime(d, "%Y-%m-%d").date() <= cutoff]
-                exp_dates = exp_dates[:config.get("num_expirations", 3)]
-
-                for exp_date in exp_dates:
-                    calls_for_exp = [opt for opt in all_calls if opt.get('expiration_date') == exp_date]
-                    strikes_above = sorted(
-                        [float(opt.get('strike_price')) for opt in calls_for_exp
-                         if opt.get('strike_price') and float(opt.get('strike_price')) > current_price]
-                    )
-                    chosen_strikes = strikes_above[:3] if len(strikes_above) >= 3 else strikes_above
-
-                    option_ids = [
-                        opt.get('id') for opt in calls_for_exp
-                        if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes and opt.get('id')
-                    ]
-                    if not option_ids:
+                for opt in calls:
+                    exp_date = opt.get("expiration_date")
+                    if not exp_date:
+                        continue
+                    exp_dt = datetime.strptime(exp_date, "%Y-%m-%d").date()
+                    # Only next 30 days
+                    if not (today <= exp_dt <= cutoff):
                         continue
 
-                    market_data_list = None
-                    try:
-                        market_data_list = r.options.get_option_market_data_by_id(option_ids)
-                    except Exception:
-                        market_data_list = None
-
-                    # Normalize shape
-                    if not market_data_list:
-                        market_data_list = []
-                        for oid in option_ids:
-                            try:
-                                md_resp = r.options.get_option_market_data_by_id(oid)
-                                if md_resp:
-                                    if isinstance(md_resp, list):
-                                        market_data_list.append(md_resp[0])
-                                    else:
-                                        market_data_list.append(md_resp)
-                            except:
-                                pass
-                            time.sleep(0.05)
-                    else:
-                        if isinstance(market_data_list, dict):
-                            market_data_list = [market_data_list]
-                        elif isinstance(market_data_list, list):
-                            flat = []
-                            for item in market_data_list:
-                                if isinstance(item, list):
-                                    flat.extend(item)
-                                else:
-                                    flat.append(item)
-                            market_data_list = flat
-
-                    if not market_data_list:
+                    oid = opt.get("id")
+                    if not oid:
                         continue
 
-                    opts_selected = [opt for opt in calls_for_exp if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes]
+                    # Fetch market data
+                    md_list = r.options.get_option_market_data_by_id(oid)
+                    if not md_list:
+                        continue
+                    md = md_list[0] if isinstance(md_list, list) else md_list
 
-                    # Pair by id or zip
-                    pairs = []
-                    md_map = {}
-                    for md in market_data_list:
-                        key = None
-                        for possible_key in ('option', 'option_id', 'id'):
-                            if possible_key in md and md.get(possible_key):
-                                key = str(md.get(possible_key))
-                                break
-                        if key:
-                            md_map[key] = md
+                    bid_price = float(md.get("bid_price") or md.get("mark_price") or 0)
+                    delta = float(md.get("delta") or 0)
+                    cop_short = float(md.get("chance_of_profit_short") or 0)
+                    open_interest = int(md.get("open_interest") or 0)
+                    volume = int(md.get("volume") or 0)
+                    strike = float(opt.get("strike_price") or 0)
 
-                    for opt in opts_selected:
-                        oid = opt.get('id') or opt.get('option_id')
-                        if oid and str(oid) in md_map:
-                            pairs.append((opt, md_map[str(oid)]))
-                    if not pairs:
-                        pairs = list(zip(opts_selected, market_data_list))
-
-                    for opt, md in pairs:
-                        try:
-                            bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
-                        except:
-                            bid_price = 0.0
-                        if bid_price < config.get("min_price", 0.10):
-                            continue
-
-                        delta = float(md.get('delta') or 0.0)
-                        cop_short = float(md.get('chance_of_profit_short') or 0.0)
-                        open_interest = int(md.get('open_interest') or 0)
-                        volume = int(md.get('volume') or 0)
-                        strike_price = float(opt.get('strike_price') or 0.0)
-
-                        # Basic filters
-                        if abs(delta) > 0.3 or cop_short < 0.7:
-                            continue
-
-                        contracts = int(float(stock_positions[ticker_clean]['quantity']) // 100)
-                        total_premium = bid_price * 100 * contracts
-
-                        ticker_results.append({
-                            "Ticker": ticker_raw,
-                            "Current Price": current_price,
-                            "Expiration Date": exp_date,
-                            "Strike Price": strike_price,
-                            "Bid Price": bid_price,
-                            "Delta": delta,
-                            "COP Short": cop_short,
-                            "Open Interest": open_interest,
-                            "Volume": volume,
-                            "Contracts": contracts,
-                            "Total Premium": total_premium
-                        })
-                return ticker_results
+                    all_calls.append({
+                        "Ticker": ticker_raw,
+                        "Expiration": exp_date,
+                        "Strike": strike,
+                        "Bid": bid_price,
+                        "Delta": delta,
+                        "COP Short": cop_short,
+                        "Volume": volume,
+                        "Open Interest": open_interest
+                    })
 
             except Exception as e:
-                send_telegram_message(f"{ticker_raw} (call scan) error: {e}")
-                return []
+                send_telegram_message(f"{ticker_raw} error fetching calls: {e}")
 
-        # Run scan
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = [executor.submit(scan_sell_call, t_raw, t_clean) for t_raw, t_clean in owned_tickers]
-            for f in as_completed(futures):
-                all_call_options.extend(f.result())
-                time.sleep(0.15)
+        # Filter by criteria: delta ≤ 0.3 & COP ≥ 0.7
+        eligible_calls = [c for c in all_calls if abs(c["Delta"]) <= 0.3 and c["COP Short"] >= 0.7]
 
-        # If we found calls, send summary
-        if all_call_options:
-            all_call_options = sorted(all_call_options, key=lambda x: x["Total Premium"], reverse=True)
-            header = "<b>📋 All Sell Call Options Summary — Owned Stocks (≥100 shares)</b>\n"
-            table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Ct':<2}|{'Prem':<6}\n" + "-"*50
-            rows = []
-            for opt in all_call_options:
-                exp_md = opt["Expiration Date"][5:]
-                rows.append(
-                    f"{opt['Ticker']:<5}|{exp_md:<5}|{opt['Strike Price']:<6.2f}|"
-                    f"{opt['Bid Price']:<4.2f}|{abs(opt['Delta']):<5.2f}|{opt['COP Short']*100:<5.1f}%|"
-                    f"{opt['Contracts']:<2}|${opt['Total Premium']:<6.0f}"
+        if eligible_calls:
+            # Format all calls summary
+            summary_rows = []
+            for c in eligible_calls:
+                summary_rows.append(
+                    f"{c['Ticker']:<5}|{c['Expiration'][5:]}|{c['Strike']:<5.2f}|"
+                    f"{c['Bid']:<4.2f}|{abs(c['Delta']):<5.2f}|{c['COP Short']*100:<5.1f}%|"
+                    f"{c['Volume']:<5}|{c['Open Interest']:<5}"
                 )
 
-            # Chunk and send
+            header = "<b>📋 All Sell Calls Summary — Owned Tickers</b>\n"
+            table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<5}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Vol':<5}|{'OI':<5}\n" + "-"*50
+
             chunk_size = 30
-            for i in range(0, len(rows), chunk_size):
-                chunk = rows[i:i+chunk_size]
-                msg = header + "<pre>" + table_header + "\n" + "\n".join(chunk) + "</pre>"
+            for i in range(0, len(summary_rows), chunk_size):
+                chunk = summary_rows[i:i+chunk_size]
+                chunk_body = "\n".join(chunk)
+                msg = header + "\n<pre>" + table_header + "\n" + chunk_body + "</pre>"
                 send_telegram_message(msg)
 
-            # ------------------ BEST SELL CALL OPTION ------------------
-            best_call = max(all_call_options, key=lambda x: x["Total Premium"])
+            # ------------------ BEST SELL CALL ALERT ------------------
+            buying_power = float(r.profiles.load_account_profile().get('buying_power', 0))
+            best_call = max(eligible_calls, key=lambda x: x['Bid']*100*max(1, int(buying_power/100/x['Strike'])))
+            max_contracts = max(1, int(buying_power // (best_call['Strike']*100)))
+            total_premium = best_call['Bid']*100*max_contracts
+
             msg_lines = [
-                "🔥 <b>Best Covered Call Option</b>",
+                "🔥 <b>Best Sell Call</b>",
                 "",
-                f"📊 {best_call['Ticker']} current: ${best_call['Current Price']:.2f}",
-                f"✅ Expiration: {best_call['Expiration Date']}",
-                f"💲 Strike: ${best_call['Strike Price']:.2f}",
-                f"💰 Bid: ${best_call['Bid Price']:.2f}",
+                f"📊 {best_call['Ticker']} Strike: ${best_call['Strike']:.2f}",
+                f"✅ Expiration: {best_call['Expiration']}",
+                f"💰 Bid: ${best_call['Bid']:.2f}",
                 f"🔺 Delta: {abs(best_call['Delta']):.3f} | COP: {best_call['COP Short']*100:.1f}%",
-                f"📦 Contracts: {best_call['Contracts']}",
-                f"💵 Total Premium: ${best_call['Total Premium']:.2f}"
+                f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
+                f"💵 Buying Power: ${buying_power:,.2f}"
             ]
             send_telegram_message("\n".join(msg_lines))
+
         else:
             send_telegram_message("⚠️ No qualifying call options found for owned stocks (≥100 shares).")
 
 except Exception as e:
-    send_telegram_message(f"Error during sell call scan: {e}")
+    send_telegram_message(f"Error generating sell calls summary: {e}")
