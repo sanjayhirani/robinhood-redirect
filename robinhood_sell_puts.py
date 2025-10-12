@@ -424,52 +424,40 @@ if all_options:
         msg = header + "\n<pre>" + table_header + "\n" + chunk_body + "</pre>"
         send_telegram_message(msg)
 
-# ------------------ CURRENT OPEN POSITIONS ALERT (Sell Puts Only) ------------------
+# ------------------ CURRENT OPEN SELL PUTS ALERT ------------------
 try:
     positions = r.options.get_open_option_positions()
     if positions:
-        msg_lines = ["📋 <b>Current Open Positions</b>\n"]
-
-        for pos in positions:
-            qty_raw = float(pos.get("quantity") or 0)
-            if qty_raw == 0:
-                continue
-
-            contracts = abs(int(qty_raw))
-
-            instrument = r.helper.request_get(pos.get("option"))
-            ticker = instrument.get("chain_symbol")
-            strike = float(instrument.get("strike_price"))
-            exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
-
-            avg_price_raw = float(pos.get("average_price") or 0.0)
-            md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
-            md_mark_price = float(md.get("mark_price") or 0.0)
-            mark_per_contract = md_mark_price * 100
-
-            # PnL calculation for sell puts
-            orig_pnl = abs(avg_price_raw) * contracts
-            pnl_now = orig_pnl - (mark_per_contract * contracts)
-
-            # Emoji based on 70% of original PnL
-            pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
-
-            # Format each position with emojis per line
-            msg_lines.extend([
-                f"📌 <b>{ticker}</b> | 📉 Sell Put",
-                f"💲 Strike: ${strike:.2f}",
-                f"✅ Exp: {exp_date}",
-                f"📦 Qty: {contracts}",
-                f"📊 Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}",
-                f"💰 Full Premium: ${orig_pnl:.2f}",
-                f"💵 Current Profit: {pnl_emoji} ${pnl_now:.2f}",
-                "────────────────────"
-            ])
-
-        send_telegram_message("\n".join(msg_lines))
-
+        sell_puts = [pos for pos in positions if float(pos.get("quantity") or 0) < 0 and 'put' in pos.get("option_type", "").lower()]
+        if sell_puts:
+            msg_lines = ["📋 <b>Current Open Sell Puts</b>\n"]
+            for pos in sell_puts:
+                qty_raw = float(pos.get("quantity") or 0)
+                contracts = abs(int(qty_raw))
+                instrument = r.helper.request_get(pos.get("option"))
+                ticker = instrument.get("chain_symbol")
+                strike = float(instrument.get("strike_price"))
+                exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
+                avg_price_raw = float(pos.get("average_price") or 0.0)
+                md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
+                md_mark_price = float(md.get("mark_price") or 0.0)
+                mark_per_contract = md_mark_price * 100
+                orig_pnl = abs(avg_price_raw) * contracts
+                pnl_now = orig_pnl - (mark_per_contract * contracts)
+                pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
+                msg_lines.extend([
+                    f"📌 <b>{ticker}</b> | 📉 Sell Put",
+                    f"💲 Strike: ${strike:.2f}",
+                    f"✅ Exp: {exp_date}",
+                    f"📦 Qty: {contracts}",
+                    f"📊 Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}",
+                    f"💰 Full Premium: ${orig_pnl:.2f}",
+                    f"💵 Current Profit: {pnl_emoji} ${pnl_now:.2f}",
+                    "────────────────────"
+                ])
+            send_telegram_message("\n".join(msg_lines))
 except Exception as e:
-    send_telegram_message(f"Error generating current positions alert: {e}")
+    send_telegram_message(f"Error generating Current Open Sell Puts alert: {e}")
 
 # Prepare list for best alert based on all options
 top10_best_options = sorted(all_options, key=lambda x: x['Total Premium'], reverse=True)[:10]
@@ -579,3 +567,86 @@ table_lines.append("</pre>")
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
 
+# ------------------ CURRENT OPEN SELL CALLS ALERT ------------------
+try:
+    positions = r.options.get_open_option_positions()
+    if positions:
+        sell_calls = [pos for pos in positions if float(pos.get("quantity") or 0) < 0 and 'call' in pos.get("option_type", "").lower()]
+        if sell_calls:
+            msg_lines = ["📋 <b>Current Open Sell Calls</b>\n"]
+            for pos in sell_calls:
+                qty_raw = float(pos.get("quantity") or 0)
+                contracts = abs(int(qty_raw))
+                instrument = r.helper.request_get(pos.get("option"))
+                ticker = instrument.get("chain_symbol")
+                strike = float(instrument.get("strike_price"))
+                exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
+                avg_price_raw = float(pos.get("average_price") or 0.0)
+                md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
+                md_mark_price = float(md.get("mark_price") or 0.0)
+                mark_per_contract = md_mark_price * 100
+                orig_pnl = abs(avg_price_raw) * contracts
+                pnl_now = orig_pnl - (mark_per_contract * contracts)
+                pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
+                msg_lines.extend([
+                    f"📌 <b>{ticker}</b> | 📈 Sell Call",
+                    f"💲 Strike: ${strike:.2f}",
+                    f"✅ Exp: {exp_date}",
+                    f"📦 Qty: {contracts}",
+                    f"📊 Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}",
+                    f"💰 Full Premium: ${orig_pnl:.2f}",
+                    f"💵 Current Profit: {pnl_emoji} ${pnl_now:.2f}",
+                    "────────────────────"
+                ])
+            send_telegram_message("\n".join(msg_lines))
+except Exception as e:
+    send_telegram_message(f"Error generating Current Open Sell Calls alert: {e}")
+
+# ------------------ ALL SELL CALL OPTIONS SUMMARY ------------------
+sell_call_options = [opt for opt in all_options if opt.get('Delta', 0) >= 0]
+if sell_call_options:
+    summary_rows = []
+    all_display_options = []
+    for opt in sell_call_options:
+        max_contracts = max(1, int(buying_power // (opt['Strike Price']*100)))
+        total_premium = opt['Bid Price']*100*max_contracts
+        opt['Max Contracts'] = max_contracts
+        opt['Total Premium'] = total_premium
+        all_display_options.append(opt)
+    all_display_options = sorted(all_display_options, key=lambda x: x['Total Premium'], reverse=True)
+    for opt in all_display_options:
+        exp_md = opt['Expiration Date'][5:]  # MM-DD
+        summary_rows.append(
+            f"{opt['Ticker']:<5}|{exp_md:<5}|{opt['Strike Price']:<6.2f}|"
+            f"{opt['Bid Price']:<4.2f}|{abs(opt['Delta']):<5.2f}|{opt['COP Short']*100:<5.1f}%|"
+            f"{opt['Max Contracts']:<2}|${opt['Total Premium']:<5.0f}"
+        )
+    header = "<b>📋 All Sell Call Options Summary — Across All Tickers</b>\n"
+    table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*45
+    chunk_size = 30
+    for i in range(0, len(summary_rows), chunk_size):
+        chunk = summary_rows[i:i+chunk_size]
+        chunk_body = "\n".join(chunk)
+        msg = header + "\n<pre>" + table_header + "\n" + chunk_body + "</pre>"
+        send_telegram_message(msg)
+
+# ------------------ BEST SELL CALL OPTION ALERT ------------------
+eligible_calls = [opt for opt in sell_call_options if opt['COP Short'] >= 0.73 and abs(opt['Delta']) <= 0.25]
+if eligible_calls:
+    best_call = max(eligible_calls, key=lambda x: x['Total Premium'])
+    max_contracts = max(1, int(buying_power // (best_call['Strike Price']*100)))
+    total_premium = best_call['Bid Price']*100*max_contracts
+    msg_lines = [
+        "🔥 <b>Best Sell Call Option</b>",
+        "",
+        f"📊 {best_call['Ticker']} current: ${best_call['Current Price']:.2f}",
+        f"✅ Expiration: {best_call['Expiration Date']}",
+        f"💲 Strike: ${best_call['Strike Price']:.2f}",
+        f"💰 Bid: ${best_call['Bid Price']:.2f}",
+        f"🔺 Delta: {abs(best_call['Delta']):.3f} | COP: {best_call['COP Short']*100:.1f}%",
+        f"📝 Max Contracts: {max_contracts} | Total Premium: ${total_premium:.2f}",
+        f"💵 Buying Power: ${buying_power:,.2f}"
+    ]
+    send_telegram_message("\n".join(msg_lines))
+else:
+    send_telegram_message("⚠️ No sell call option meets COP ≥ 73% and Δ ≤ 0.25")
