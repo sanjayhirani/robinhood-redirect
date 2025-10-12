@@ -11,8 +11,10 @@ min_price: 0.10
 # Days to calculate 30-day low
 low_days: 30
 
-# Maximum expiry days to consider
-expiry_limit_days: 30
+# Expiration filter for options (only expirations 25–35 days out)
+expiry_window_days:
+  min: 25
+  max: 35
 
 # Plot settings
 plot:
