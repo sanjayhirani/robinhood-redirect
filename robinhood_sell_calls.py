@@ -1,9 +1,17 @@
 import os
+import subprocess
+import sys
 import requests
 import robin_stocks.robinhood as r
 import pandas as pd
-import yaml
 from datetime import datetime, timedelta
+
+# ------------------ AUTO-INSTALL YAML ------------------
+try:
+    import yaml
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "PyYAML"])
+    import yaml
 
 # ------------------ LOAD CONFIG ------------------
 with open("config.yaml", encoding="utf-8") as f:
