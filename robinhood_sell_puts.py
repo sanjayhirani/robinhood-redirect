@@ -386,7 +386,7 @@ if all_options:
     )[:10]
     top_ticker_names = {t['Ticker'] for t in top_tickers}
 
-# ------------------ ALL OPTIONS SUMMARY (WITH DELTA) ------------------
+# ------------------ ALL PUT OPTIONS SUMMARY (WITH DELTA) ------------------
 
 if all_options:
     summary_rows = []
@@ -413,7 +413,7 @@ if all_options:
         )
 
     # Header
-    header = "<b>📋 All Options Summary — Across All Tickers</b>\n"
+    header = "<b>📋 All Put Options Summary</b>\n"
     table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*45
 
     # Split into chunks of 30 rows
@@ -504,80 +504,6 @@ if eligible_options:
 else:
     # No eligible option found
     send_telegram_message("⚠️ No option meets COP ≥ 73% and Δ ≤ 0.25")
-
-# ------------------ 30-DAY STATS ALERT WITH RSI & TREND EMOJI ------------------
-
-table_data = []
-
-for ticker_raw, ticker_clean in zip(TICKERS_RAW, TICKERS):
-    try:
-        stock = yf.Ticker(ticker_clean)
-        hist = stock.history(period="30d", interval="1d")
-        if hist.empty or not all(col in hist.columns for col in ['Low', 'High', 'Close']):
-            continue
-
-        low_30 = hist['Low'].min()
-        high_30 = hist['High'].max()
-        close_now = hist['Close'][-1]
-
-        # Calculate RSI (14-day)
-        delta = hist['Close'].diff()
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-        avg_gain = gain.rolling(14, min_periods=14).mean()
-        avg_loss = loss.rolling(14, min_periods=14).mean()
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-        rsi_latest = rsi[-1] if not pd.isna(rsi[-1]) else None
-
-        # Determine RSI emoji
-        if isinstance(rsi_latest, float):
-            if rsi_latest < 30:
-                rsi_emoji = "📉"
-            elif rsi_latest > 70:
-                rsi_emoji = "📈"
-            else:
-                rsi_emoji = "⚪"
-        else:
-            rsi_emoji = "❓"
-
-        table_data.append({
-            "Ticker": ticker_raw,
-            "Current": close_now,
-            "30D Low": low_30,
-            "30D High": high_30,
-            "RSI14": rsi_latest,
-            "RSI Emoji": rsi_emoji
-        })
-
-    except Exception as e:
-        table_data.append({
-            "Ticker": ticker_raw,
-            "Current": "Err",
-            "30D Low": "Err",
-            "30D High": "Err",
-            "RSI14": "Err",
-            "RSI Emoji": "❓"
-        })
-
-# Format table in fixed-width style for Telegram
-header = "<b>📊 30-Day Ticker Summary</b>\n<pre>"
-table_header = f"{'Tkr':<6}|{'Cur':<7}|{'30L':<7}|{'30H':<7}|{'RSI':<6}|{'Trnd':<5}\n" + "-"*50
-
-table_lines = [header + table_header]
-for row in table_data:
-    cur = f"${row['Current']:.2f}" if isinstance(row['Current'], float) else row['Current']
-    low = f"${row['30D Low']:.2f}" if isinstance(row['30D Low'], float) else row['30D Low']
-    high = f"${row['30D High']:.2f}" if isinstance(row['30D High'], float) else row['30D High']
-    rsi_val = f"{row['RSI14']:.1f}" if isinstance(row['RSI14'], float) else row['RSI14']
-    rsi_emoji = row['RSI Emoji']
-
-    table_lines.append(f"{row['Ticker']:<6}|{cur:<7}|{low:<7}|{high:<7}|{rsi_val:<6}|{rsi_emoji:<5}")
-
-table_lines.append("</pre>")
-
-# Send Telegram alert
-send_telegram_message("\n".join(table_lines))
 
 # ------------------ OWNED TICKERS SELL CALLS SUMMARY (SORTED BY TOTAL PREMIUM) ------------------
 try:
@@ -695,3 +621,99 @@ try:
 
 except Exception as e:
     send_telegram_message(f"Error generating sell calls summary: {e}")
+
+# ------------------ 30-DAY STATS ALERT WITH RSI30, TREND EMOJI, AND ALPHABETICAL SORT ------------------
+
+table_data = []
+
+for ticker_raw, ticker_clean in zip(TICKERS_RAW, TICKERS):
+    try:
+        stock = yf.Ticker(ticker_clean)
+        hist = stock.history(period="30d", interval="1d")
+        if hist.empty or not all(col in hist.columns for col in ['Low', 'High', 'Close']):
+            continue
+
+        low_30 = hist['Low'].min()
+        high_30 = hist['High'].max()
+        close_now = hist['Close'][-1]
+
+        # Calculate RSI (30-day Wilder's method)
+        delta = hist['Close'].diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+
+        period = 30
+        avg_gain = gain.rolling(window=period, min_periods=period).mean()
+        avg_loss = loss.rolling(window=period, min_periods=period).mean()
+
+        # First value: simple average
+        avg_gain.iloc[period-1] = gain.iloc[:period].mean()
+        avg_loss.iloc[period-1] = loss.iloc[:period].mean()
+
+        # Wilder's smoothing for subsequent values
+        for i in range(period, len(avg_gain)):
+            avg_gain.iloc[i] = (avg_gain.iloc[i-1] * (period-1) + gain.iloc[i]) / period
+            avg_loss.iloc[i] = (avg_loss.iloc[i-1] * (period-1) + loss.iloc[i]) / period
+
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        rsi_latest = rsi[-1] if not pd.isna(rsi[-1]) else None
+
+        # Determine dynamic RSI emoji with extreme levels
+        if isinstance(rsi_latest, float):
+            if rsi_latest <= 20:
+                rsi_emoji = "🔴"  # Extremely oversold
+            elif rsi_latest >= 80:
+                rsi_emoji = "🟢"  # Extremely overbought
+            else:
+                rsi_min = rsi.min()
+                rsi_max = rsi.max()
+                if rsi_latest <= rsi_min + 0.33*(rsi_max - rsi_min):
+                    rsi_emoji = "📉"  # Relatively low
+                elif rsi_latest >= rsi_min + 0.66*(rsi_max - rsi_min):
+                    rsi_emoji = "📈"  # Relatively high
+                else:
+                    rsi_emoji = "⚪"  # Neutral
+        else:
+            rsi_emoji = "❓"
+
+        table_data.append({
+            "Ticker": ticker_raw,
+            "Current": close_now,
+            "30D Low": low_30,
+            "30D High": high_30,
+            "RSI30": rsi_latest,
+            "RSI Emoji": rsi_emoji
+        })
+
+    except Exception as e:
+        table_data.append({
+            "Ticker": ticker_raw,
+            "Current": "Err",
+            "30D Low": "Err",
+            "30D High": "Err",
+            "RSI30": "Err",
+            "RSI Emoji": "❓"
+        })
+
+# Sort tickers alphabetically
+table_data = sorted(table_data, key=lambda x: x['Ticker'])
+
+# Format table in fixed-width style for Telegram
+header = "<b>📊 30-Day Ticker Summary</b>\n<pre>"
+table_header = f"{'Tkr':<6}|{'Cur':<7}|{'30L':<7}|{'30H':<7}|{'RSI':<6}|{'Trnd':<5}\n" + "-"*50
+
+table_lines = [header + table_header]
+for row in table_data:
+    cur = f"${row['Current']:.2f}" if isinstance(row['Current'], float) else row['Current']
+    low = f"${row['30D Low']:.2f}" if isinstance(row['30D Low'], float) else row['30D Low']
+    high = f"${row['30D High']:.2f}" if isinstance(row['30D High'], float) else row['30D High']
+    rsi_val = f"{row['RSI30']:.1f}" if isinstance(row['RSI30'], float) else row['RSI30']
+    rsi_emoji = row['RSI Emoji']
+
+    table_lines.append(f"{row['Ticker']:<6}|{cur:<7}|{low:<7}|{high:<7}|{rsi_val:<6}|{rsi_emoji:<5}")
+
+table_lines.append("</pre>")
+
+# Send Telegram alert
+send_telegram_message("\n".join(table_lines))
