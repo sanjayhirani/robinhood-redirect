@@ -268,7 +268,7 @@ def scan_ticker(ticker_raw, ticker_clean):
                 return []
 
         # Get min/max from config
-        min_days = config.get("expiry_window_days", {}).get("min", 25)
+        min_days = config.get("expiry_window_days", {}).get("min", 15)
         max_days = config.get("expiry_window_days", {}).get("max", 35)
         
         # Collect expiration dates
@@ -740,6 +740,7 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
 
 
