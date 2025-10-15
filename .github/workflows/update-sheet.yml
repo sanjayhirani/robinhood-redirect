@@ -20,7 +20,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install robin_stocks gspread google-auth pandas
+          pip install robin_stocks gspread google-auth pandas gspread-formatting
 
       - name: Run Sheet Update
         env:
