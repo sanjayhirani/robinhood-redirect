@@ -29,34 +29,21 @@ creds = Credentials.from_service_account_info(
 )
 gc = gspread.authorize(creds)
 
-# Debug: List all sheets the service account can see
-try:
-    sheet_list = gc.list_spreadsheet_files()
-    print("Service account can see the following sheets:")
-    for s in sheet_list:
-        print(f"- {s['name']} (ID: {s['id']})")
-except Exception as e:
-    print(f"Error listing sheets: {e}")
-
-# Check the service account email being used
-print(f"Using service account: {creds.service_account_email}")
-
 # ---------------- SHEET SETUP ----------------
-SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME", "Robinhood Options Tracker")
+SHEET_ID = "1ANhHY6M_BT0SeKjRXtBs9Iw6mjtJHlcHaDNtM58BvQU"
 
 try:
-    # Try to open the existing sheet
-    sh = gc.open(SHEET_NAME)
+    sh = gc.open_by_key(SHEET_ID)
 except gspread.SpreadsheetNotFound:
-    # If not found, raise a clear error
     raise Exception(
-        f"Spreadsheet '{SHEET_NAME}' not found. "
-        "Ensure it exists and is shared with your service account email."
+        f"Spreadsheet with ID '{SHEET_ID}' not found. "
+        "Ensure the service account has Editor access."
     )
 
 # Use the first worksheet
 worksheet = sh.sheet1
 worksheet.update_title("Options Positions")
+print(f"Successfully opened sheet: {sh.title}")
 
 # ---------------- ROBINHOOD LOGIN ----------------
 USERNAME = os.environ["RH_USERNAME"]
