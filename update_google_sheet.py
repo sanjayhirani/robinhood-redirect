@@ -1,3 +1,16 @@
+import subprocess
+import sys
+
+# ---------------- AUTO-INSTALL DEPENDENCIES ----------------
+required_packages = ["robin_stocks", "gspread", "google-auth", "pandas"]
+for pkg in required_packages:
+    try:
+        __import__(pkg.replace("-", "_"))
+    except ImportError:
+        print(f"⚙️ Installing missing dependency: {pkg} ...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+
+# ---------------- IMPORTS ----------------
 import os
 import json
 import gspread
@@ -95,6 +108,8 @@ df = pd.DataFrame(all_data)
 if not df.empty:
     worksheet.clear()
     worksheet.update([df.columns.values.tolist()] + df.values.tolist())
+    print(f"✅ Sheet updated successfully with {len(df)} positions.")
 else:
     worksheet.clear()
     worksheet.update([[f"No option positions found as of {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"]])
+    print("⚠️ No option positions found.")
