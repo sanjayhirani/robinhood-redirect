@@ -2,7 +2,7 @@ import subprocess
 import sys
 
 # ---------------- AUTO-INSTALL DEPENDENCIES ----------------
-required_packages = ["robin_stocks", "gspread", "google-auth", "pandas"]
+required_packages = ["robin_stocks", "gspread", "google-auth", "pandas", "gspread-formatting"]
 for pkg in required_packages:
     try:
         __import__(pkg.replace("-", "_"))
@@ -18,6 +18,7 @@ import robin_stocks.robinhood as r
 import pandas as pd
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+from gspread_formatting import *
 
 # ---------------- GOOGLE AUTH ----------------
 google_creds_json = os.environ["GOOGLE_CREDENTIALS_JSON"]
@@ -31,39 +32,44 @@ gc = gspread.authorize(creds)
 
 # ---------------- SHEET SETUP ----------------
 SHEET_ID = "1ANhHY6M_BT0SeKjRXtBs9Iw6mjtJHlcHaDNtM58BvQU"
-
 try:
     sh = gc.open_by_key(SHEET_ID)
 except gspread.SpreadsheetNotFound:
-    raise Exception(
-        f"Spreadsheet with ID '{SHEET_ID}' not found. "
-        "Ensure the service account has Editor access."
-    )
+    raise Exception(f"Spreadsheet with ID '{SHEET_ID}' not found. Ensure the service account has Editor access.")
 
-# Use the first worksheet
-worksheet = sh.sheet1
-worksheet.update_title("Options Positions")
-print(f"Successfully opened sheet: {sh.title}")
+# Ensure sheets exist
+try:
+    options_ws = sh.worksheet("Options Positions")
+except gspread.WorksheetNotFound:
+    options_ws = sh.add_worksheet("Options Positions", rows="100", cols="25")
+
+try:
+    dashboard_ws = sh.worksheet("Dashboard")
+except gspread.WorksheetNotFound:
+    dashboard_ws = sh.add_worksheet("Dashboard", rows="20", cols="10")
+
+options_ws.update_title("Options Positions")
+print(f"✅ Sheets ready: {options_ws.title}, {dashboard_ws.title}")
 
 # ---------------- ROBINHOOD LOGIN ----------------
 USERNAME = os.environ["RH_USERNAME"]
 PASSWORD = os.environ["RH_PASSWORD"]
+login_res = r.login(USERNAME, PASSWORD)
+if not login_res.get('access_token'):
+    raise Exception("Robinhood login failed")
 
-r.login(USERNAME, PASSWORD)
-
-# ---------------- FETCH OPTIONS (with error handling) ----------------
+# ---------------- FETCH OPTIONS ----------------
 open_positions = r.options.get_open_option_positions()
-closed_positions = r.options.get_all_option_positions()  # includes closed ones if available
+closed_positions = r.options.get_all_option_positions()
 
+# ---------------- HELPER FUNCTIONS ----------------
 def parse_positions(positions, status):
     records = []
     for pos in positions:
         qty = float(pos.get("quantity") or 0)
-        if qty == 0:  # Skip positions with zero quantity
+        if qty == 0:
             continue
-
         instrument = r.helper.request_get(pos.get("option"))
-
         market_data_list = r.options.get_option_market_data_by_id(instrument.get("id"))
         if not market_data_list:
             print(f"⚠️ Market data list is empty for {instrument.get('chain_symbol')}")
@@ -76,11 +82,12 @@ def parse_positions(positions, status):
 
         ticker = instrument.get("chain_symbol")
         opt_type = instrument.get("type", "put").capitalize()
-        exp = instrument.get("expiration_date")
+        exp = pd.to_datetime(instrument.get("expiration_date")).strftime('%d/%m/%y')
         strike = float(instrument.get("strike_price"))
         avg_price = float(pos.get("average_price") or 0)
-        open_date = pos.get("created_at", "")[:10]
-        close_date = pos.get("updated_at", "")[:10]
+        open_date = pd.to_datetime(pos.get("created_at")).strftime('%d/%m/%y')
+        close_date_raw = pos.get("updated_at")
+        close_date = pd.to_datetime(close_date_raw).strftime('%d/%m/%y') if close_date_raw else ""
 
         total_premium = avg_price * 100 * abs(qty)
         current_value = mark * 100 * abs(qty)
@@ -96,69 +103,73 @@ def parse_positions(positions, status):
             "Quantity": abs(int(qty)),
             "Avg Price": avg_price,
             "Mark Price": mark,
-            "Total Premium": total_premium,
-            "Current Value": current_value,
-            "PnL ($)": round(pnl, 2),
+            "Total Premium": total_premium / 100,
+            "Current Value": current_value / 100,
+            "PnL ($)": round(pnl / 100, 2),
             "PnL (%)": round(pnl_pct, 2),
             "Chance of Profit": round(cop * 100, 1),
             "Delta": round(delta, 3),
             "Open Date": open_date,
             "Close Date": close_date if status == "Closed" else "",
             "Status": status,
-            "Last Updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "Instrument ID": instrument.get("id"),
+            "Last Updated": datetime.now().strftime('%d/%m/%y %H:%M:%S')
         })
     return records
 
 # ---------------- PARSE DATA ----------------
 open_data = parse_positions(open_positions, "Open")
 closed_data = parse_positions(closed_positions, "Closed")
-
 all_data = open_data + closed_data
-df = pd.DataFrame(all_data)  # <-- Create the DataFrame here
+df = pd.DataFrame(all_data)
 
-from gspread_formatting import *
+# Add live account balance as a column
+account_info = r.profiles.load_account_profile()
+live_balance = float(account_info.get("cash_available_for_withdrawal") or 0)
+df["Account Balance ($)"] = live_balance
 
-# ---------------- WRITE TO GOOGLE SHEET ----------------
-if open_data or closed_data:
-    df = pd.DataFrame(open_data + closed_data)
+# ---------------- WRITE OPTIONS POSITIONS SHEET ----------------
+if not df.empty:
+    options_ws.clear()
+    options_ws.update([df.columns.values.tolist()] + df.values.tolist())
 
-    # Convert dates to UK format
-    for col in ["Expiration", "Open Date", "Close Date", "Last Updated"]:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%d/%m/%y')
-
-    # Adjust Total Premium and PnL
-    df["Total Premium"] = df["Total Premium"].abs() / 100
-    df["PnL ($)"] = df["PnL ($)"] / 100
-
-    # Update the Google Sheet
-    worksheet.clear()
-    worksheet.update([df.columns.values.tolist()] + df.values.tolist())
-    print(f"✅ Sheet updated successfully with {len(df)} positions.")
-
-    # Polished formatting
-    worksheet.freeze(rows=1)
-    set_frozen(worksheet, rows=1)
-    set_basic_filter(worksheet)  # Enable filters for all columns
-
-    # Apply conditional formatting for PnL ($)
-    pnl_col_index = df.columns.get_loc("PnL ($)") + 1  # gspread uses 1-based indexing
-    green_rule = CellFormat(backgroundColor=color(0.8,1,0.8))  # light green
-    red_rule = CellFormat(backgroundColor=color(1,0.8,0.8))    # light red
-
-    # Apply rules row-wise
-    for i, pnl in enumerate(df["PnL ($)"], start=2):  # start=2 because row 1 is header
-        cell_range = f"{gspread.utils.rowcol_to_a1(i, pnl_col_index)}"
+    # Freeze header row
+    set_frozen(options_ws, rows=1)
+    # Enable filters
+    set_basic_filter(options_ws)
+    # Conditional formatting for PnL ($)
+    pnl_col = df.columns.get_loc("PnL ($)") + 1
+    for i, pnl in enumerate(df["PnL ($)"], start=2):
+        cell = f"{gspread.utils.rowcol_to_a1(i, pnl_col)}"
         if pnl > 0:
-            format_cell_range(worksheet, cell_range, green_rule)
+            format_cell_range(options_ws, cell, CellFormat(backgroundColor=color(0.8,1,0.8)))
         elif pnl < 0:
-            format_cell_range(worksheet, cell_range, red_rule)
-
-    # Auto resize columns
-    for i in range(1, len(df.columns)+1):
-        worksheet.format(f"{gspread.utils.rowcol_to_a1(1,i)}", {"wrapStrategy": "WRAP"})
-        worksheet.resize(cols=len(df.columns))
+            format_cell_range(options_ws, cell, CellFormat(backgroundColor=color(1,0.8,0.8)))
 else:
-    worksheet.clear()
-    worksheet.update([[f"No option positions found as of {datetime.now().strftime('%d/%m/%y %H:%M:%S')}"]])
-    print("⚠️ No option positions found.")
+    options_ws.clear()
+    options_ws.update([[f"No option positions found as of {datetime.now().strftime('%d/%m/%y %H:%M:%S')}"]])
+
+# ---------------- DASHBOARD ----------------
+dashboard_ws.clear()
+summary_data = [
+    ["Metric", "Value"],
+    ["Total Open Positions", len(open_data)],
+    ["Total Closed Positions", len(closed_data)],
+    ["Total PnL ($)", round(df["PnL ($)"].sum(),2) if not df.empty else 0],
+    ["Total Premium ($)", round(df["Total Premium"].sum(),2) if not df.empty else 0],
+    ["Robinhood Balance ($)", live_balance],
+]
+
+# Top 5 gainers and losers
+if not df.empty:
+    top_gainers = df.nlargest(5, "PnL ($)")[["Ticker","PnL ($)"]].to_dict("records")
+    top_losers = df.nsmallest(5, "PnL ($)")[["Ticker","PnL ($)"]].to_dict("records")
+else:
+    top_gainers = top_losers = []
+
+dashboard_ws.update(summary_data)
+dashboard_ws.update([["Top 5 Gainers"] + [""]*(len(summary_data[0])-1)] + [[g["Ticker"], g["PnL ($)"]] for g in top_gainers])
+dashboard_ws.update([["Top 5 Losers"] + [""]*(len(summary_data[0])-1)] + [[l["Ticker"], l["PnL ($)"]] for l in top_losers])
+
+# Optional: charts / heatmaps can be added manually using Google Sheets UI since gspread cannot create charts via API.
+print("✅ Dashboard and Options Positions updated successfully.")
