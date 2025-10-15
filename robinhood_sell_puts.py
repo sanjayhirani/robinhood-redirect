@@ -119,7 +119,7 @@ send_telegram_message("\n".join(summary_lines))
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
-# ------------------ CURRENT OPEN POSITIONS ALERT (Sell Puts Only) ------------------
+# ------------------ CURRENT OPEN POSITIONS ALERT (Sell Calls & Puts) ------------------
 try:
     positions = r.options.get_open_option_positions()
     if positions:
@@ -132,30 +132,42 @@ try:
 
             contracts = abs(int(qty_raw))
 
+            # Fetch instrument data
             instrument = r.helper.request_get(pos.get("option"))
             ticker = instrument.get("chain_symbol")
             strike = float(instrument.get("strike_price"))
             exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
 
+            # Determine option type
+            opt_type = instrument.get("type") or instrument.get("option_type") or "put"
+            opt_label = "Sell Put" if opt_type.lower() == "put" else "Sell Call"
+
+            # Average price & market data
             avg_price_raw = float(pos.get("average_price") or 0.0)
-            md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
+            md_list = r.options.get_option_market_data_by_id(instrument.get("id"))
+            if md_list:
+                md = md_list[0] if isinstance(md_list, list) else md_list
+            else:
+                md = {"mark_price": 0.0}
             md_mark_price = float(md.get("mark_price") or 0.0)
             mark_per_contract = md_mark_price * 100
 
-            # PnL calculation for sell puts
-            orig_pnl = abs(avg_price_raw) * contracts
+            # PnL calculation (per-contract)
+            orig_pnl = abs(avg_price_raw) * 100 * contracts
             pnl_now = orig_pnl - (mark_per_contract * contracts)
-
-            # Emoji based on 70% of original PnL
             pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
 
-            # Format each position with emojis per line
+            # Latest stock price
+            latest_price_list = r.stocks.get_latest_price(ticker)
+            current_price = float(latest_price_list[0]) if latest_price_list and latest_price_list[0] else 0.0
+
+            # Format message
             msg_lines.extend([
                 f"📌 <b>{ticker}</b> | {opt_label}",
                 f"💲 Strike: ${strike:.2f}",
                 f"✅ Exp: {exp_date}",
                 f"📦 Qty: {contracts}",
-                f"📊 Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}",
+                f"📊 Current Price: ${current_price:.2f}",
                 f"💰 Full Premium: ${orig_pnl:.2f}",
                 f"💵 Current Profit: {pnl_emoji} ${pnl_now:.2f}",
                 "────────────────────"
@@ -728,4 +740,5 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
