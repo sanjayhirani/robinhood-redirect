@@ -151,7 +151,7 @@ try:
 
             # Format each position with emojis per line
             msg_lines.extend([
-                f"📌 <b>{ticker}</b> | 📉 Sell Put",
+                f"📌 <b>{ticker}</b> | {opt_label}",
                 f"💲 Strike: ${strike:.2f}",
                 f"✅ Exp: {exp_date}",
                 f"📦 Qty: {contracts}",
@@ -728,3 +728,4 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
