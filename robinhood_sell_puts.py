@@ -132,7 +132,7 @@ try:
 
             contracts = abs(int(qty_raw))
 
-            instrument = r.helper.request_get(pos.get("option"))
+            instrument_data = r.options.get_option_instrument_data_by_id(pos['option_id'])
             ticker = instrument.get("chain_symbol")
             strike = float(instrument.get("strike_price"))
             exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
@@ -728,5 +728,6 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
 
