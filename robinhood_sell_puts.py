@@ -153,8 +153,8 @@ try:
             mark_per_contract = md_mark_price * 100
 
             # PnL calculation (per-contract)
-            orig_pnl = abs(avg_price_raw) * 100 * contracts  # total premium received
-            pnl_now = orig_pnl - (md_mark_price * 100 * contracts)  # current value of position
+            orig_pnl = abs(avg_price_raw) * contracts  # total premium received
+            pnl_now = orig_pnl - (mark_per_contract * contracts)  # current value of position
             pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
 
             # Latest stock price
@@ -740,6 +740,7 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
 
 
