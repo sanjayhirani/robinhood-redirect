@@ -274,14 +274,14 @@ def scan_ticker(ticker_raw, ticker_clean):
         # Collect expiration dates
         exp_dates = sorted({opt.get('expiration_date') for opt in all_puts if opt.get('expiration_date')})
         
-        # Keep only expirations within the 25-35 day window
+        # Keep only expirations within the 15-35 day window
         exp_dates = [
             d for d in exp_dates
             if min_days <= (datetime.strptime(d, "%Y-%m-%d").date() - today).days <= max_days
         ]
         
         # Limit to configured number of expirations per ticker
-        exp_dates = exp_dates[:config.get("num_expirations", 3)]
+        exp_dates = exp_dates[:config.get("num_expirations", 4)]
 
         candidate_puts = []
         for exp_date in exp_dates:
@@ -740,6 +740,7 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
 
 
