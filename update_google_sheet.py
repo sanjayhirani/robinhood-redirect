@@ -31,13 +31,18 @@ gc = gspread.authorize(creds)
 
 # ---------------- SHEET SETUP ----------------
 SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME", "Robinhood Options Tracker")
-sh = None
+
 try:
+    # Try to open the existing sheet
     sh = gc.open(SHEET_NAME)
 except gspread.SpreadsheetNotFound:
-    sh = gc.create(SHEET_NAME)
-    sh.share(creds_dict["client_email"], perm_type='user', role='writer')
+    # If not found, raise a clear error
+    raise Exception(
+        f"Spreadsheet '{SHEET_NAME}' not found. "
+        "Ensure it exists and is shared with your service account email."
+    )
 
+# Use the first worksheet
 worksheet = sh.sheet1
 worksheet.update_title("Options Positions")
 
