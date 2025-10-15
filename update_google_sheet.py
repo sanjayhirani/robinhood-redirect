@@ -116,12 +116,49 @@ closed_data = parse_positions(closed_positions, "Closed")
 all_data = open_data + closed_data
 df = pd.DataFrame(all_data)  # <-- Create the DataFrame here
 
+from gspread_formatting import *
+
 # ---------------- WRITE TO GOOGLE SHEET ----------------
-if not df.empty:
+if open_data or closed_data:
+    df = pd.DataFrame(open_data + closed_data)
+
+    # Convert dates to UK format
+    for col in ["Expiration", "Open Date", "Close Date", "Last Updated"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%d/%m/%y')
+
+    # Adjust Total Premium and PnL
+    df["Total Premium"] = df["Total Premium"].abs() / 100
+    df["PnL ($)"] = df["PnL ($)"] / 100
+
+    # Update the Google Sheet
     worksheet.clear()
     worksheet.update([df.columns.values.tolist()] + df.values.tolist())
     print(f"✅ Sheet updated successfully with {len(df)} positions.")
+
+    # Polished formatting
+    worksheet.freeze(rows=1)
+    set_frozen(worksheet, rows=1)
+    set_basic_filter(worksheet)  # Enable filters for all columns
+
+    # Apply conditional formatting for PnL ($)
+    pnl_col_index = df.columns.get_loc("PnL ($)") + 1  # gspread uses 1-based indexing
+    green_rule = CellFormat(backgroundColor=color(0.8,1,0.8))  # light green
+    red_rule = CellFormat(backgroundColor=color(1,0.8,0.8))    # light red
+
+    # Apply rules row-wise
+    for i, pnl in enumerate(df["PnL ($)"], start=2):  # start=2 because row 1 is header
+        cell_range = f"{gspread.utils.rowcol_to_a1(i, pnl_col_index)}"
+        if pnl > 0:
+            format_cell_range(worksheet, cell_range, green_rule)
+        elif pnl < 0:
+            format_cell_range(worksheet, cell_range, red_rule)
+
+    # Auto resize columns
+    for i in range(1, len(df.columns)+1):
+        worksheet.format(f"{gspread.utils.rowcol_to_a1(1,i)}", {"wrapStrategy": "WRAP"})
+        worksheet.resize(cols=len(df.columns))
 else:
     worksheet.clear()
-    worksheet.update([[f"No option positions found as of {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"]])
+    worksheet.update([[f"No option positions found as of {datetime.now().strftime('%d/%m/%y %H:%M:%S')}"]])
     print("⚠️ No option positions found.")
