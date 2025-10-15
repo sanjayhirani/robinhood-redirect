@@ -32,7 +32,6 @@ gc = gspread.authorize(creds)
 
 # ---------------- SHEET SETUP ----------------
 SHEET_ID = "1ANhHY6M_BT0SeKjRXtBs9Iw6mjtJHlcHaDNtM58BvQU"
-
 try:
     sh = gc.open_by_key(SHEET_ID)
 except gspread.SpreadsheetNotFound:
@@ -42,13 +41,11 @@ except gspread.SpreadsheetNotFound:
     )
 
 # ---------------- WORKSHEET CREATION ----------------
-# Dashboard sheet
 try:
     dashboard_ws = sh.worksheet("Dashboard")
 except gspread.WorksheetNotFound:
     dashboard_ws = sh.add_worksheet(title="Dashboard", rows=20, cols=10)
 
-# Options positions sheet
 try:
     options_ws = sh.worksheet("Options Positions")
 except gspread.WorksheetNotFound:
@@ -105,10 +102,15 @@ def parse_positions(positions, status):
         else:
             delta = abs(delta)
 
-        total_premium = avg_price * 100 * abs(qty)
-        current_value = mark * 100 * abs(qty)
-        pnl = current_value - total_premium if status == "Open" else current_value - total_premium
-        pnl_pct = (pnl / total_premium * 100) if total_premium else 0
+        # ---------------- CALCULATIONS ----------------
+        total_premium = abs(avg_price * qty)
+        total_premium_display = total_premium / 100      # divide by 100, positive
+
+        current_value = mark * qty
+        pnl = current_value - avg_price * qty
+        pnl_display = pnl / 100                           # divide by 100
+
+        pnl_pct = round((pnl / total_premium * 100) if total_premium else 0, 2)
 
         action = f"{'Buy' if qty > 0 else 'Sell'} {opt_type}"
 
@@ -121,10 +123,10 @@ def parse_positions(positions, status):
             "Quantity": int(abs(qty)),
             "Avg Price": avg_price,
             "Mark Price": mark,
-            "Total Premium": total_premium,
+            "Total Premium": total_premium_display,
             "Current Value": current_value,
-            "PnL ($)": pnl,
-            "PnL (%)": round(pnl_pct, 2),
+            "PnL ($)": pnl_display,
+            "PnL (%)": pnl_pct,
             "Chance of Profit": round(cop * 100, 1),
             "Delta": round(delta, 3),
             "Open Date": open_date,
@@ -142,34 +144,30 @@ all_data = open_data + closed_data
 df = pd.DataFrame(all_data)
 
 # ---------------- CLEAN DATA (JSON-safe + UK dates) ----------------
-# Replace NaN / inf with empty string for Google Sheets
 df.replace([pd.NA, None, float('inf'), float('-inf')], '', inplace=True)
 
-# UK date formatting as strings
 for col in ["Expiration", "Open Date", "Close Date", "Last Updated"]:
     if col in df.columns:
         df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%d/%m/%y')
-        df[col] = df[col].fillna('')  # ensure NaT becomes empty string
+        df[col] = df[col].fillna('')
 
 # ---------------- WRITE OPTIONS POSITIONS (JSON-safe) ----------------
 options_ws.clear()
-
-sheet_values = [df.columns.tolist()]  # header
+sheet_values = [df.columns.tolist()]
 for row in df.values.tolist():
-    # convert all remaining values to string for JSON safety
     sheet_values.append([str(cell) if cell is not None else '' for cell in row])
 
 options_ws.update(sheet_values)
 
 # Hide Instrument ID
 hid_col = df.columns.get_loc("Instrument ID") + 1
-options_ws.hide_columns(hid_col)
+options_ws.hide_columns(hid_col, hid_col)
 
 # Freeze header row
 options_ws.freeze(1)
 set_frozen(options_ws, rows=1)
 
-# Conditional formatting PnL (numbers interpreted correctly in Sheet)
+# Conditional formatting for PnL
 pnl_col = df.columns.get_loc("PnL ($)") + 1
 for i, pnl in enumerate(df["PnL ($)"], start=2):
     cell = f"{gspread.utils.rowcol_to_a1(i, pnl_col)}"
@@ -184,7 +182,6 @@ print(f"✅ Options Positions sheet updated with {len(df)} positions.")
 
 # ---------------- DASHBOARD (JSON-safe) ----------------
 dashboard_ws.clear()
-
 summary = {
     "Total Open Positions": len(open_data),
     "Total Closed Positions": len(closed_data),
@@ -193,7 +190,6 @@ summary = {
     "Robinhood Cash": cash_balance
 }
 
-# Convert all values to strings for safe JSON update
 dashboard_values = [["Metric", "Value"]]
 for k, v in summary.items():
     dashboard_values.append([str(k), str(v)])
