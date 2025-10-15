@@ -18,7 +18,7 @@ import robin_stocks.robinhood as r
 import pandas as pd
 from google.oauth2.service_account import Credentials
 from datetime import datetime
-from gspread_formatting import *
+from gspread_formatting import set_basic_filter, set_frozen, format_cell_range, CellFormat, color
 
 # ---------------- GOOGLE AUTH ----------------
 google_creds_json = os.environ["GOOGLE_CREDENTIALS_JSON"]
