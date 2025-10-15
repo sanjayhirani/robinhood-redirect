@@ -83,33 +83,52 @@ def parse_positions(positions, status):
         opt_type = instrument.get("type", "put").capitalize()
         exp = instrument.get("expiration_date")
         strike = float(instrument.get("strike_price") or 0)
-        open_date = pos.get("created_at", "")[:10]  # becomes 'Date'
-        close_date = pos.get("updated_at", "")[:10]
+        open_date_raw = pos.get("created_at", "")[:10]
+        close_date_raw = pos.get("updated_at", "")[:10]
 
         # ---------------- MARKET DATA ----------------
         market_data_list = r.options.get_option_market_data_by_id(instrument.get("id") or "")
         if market_data_list:
             market_data = market_data_list[0]
-            ask_price = abs(float(market_data.get("ask_price") or 0))  # positive
+            ask_price = abs(float(market_data.get("ask_price") or 0))
+            bid_price = abs(float(market_data.get("bid_price") or 0))
             mark = float(market_data.get("mark_price") or 0)
             delta = float(market_data.get("delta") or 0)
             cop = float(market_data.get("chance_of_profit_short") or 0)
         else:
-            ask_price = mark = delta = cop = 0
+            ask_price = bid_price = mark = delta = cop = 0
 
         if opt_type.lower() == "put":
             delta = -abs(delta)
         else:
             delta = abs(delta)
 
+        # ---------------- BID/ASK LOGIC ----------------
+        # If it's a sell call (qty negative for sell?), use bid price
+        if qty < 0 and opt_type.lower() == "call":
+            price_for_calc = bid_price
+        else:
+            price_for_calc = ask_price
+
         # ---------------- FINANCIALS ----------------
-        total_premium = ask_price * qty * 100     # multiply by 100
-        current_value = mark * qty * 100          # multiply by 100
+        total_premium = price_for_calc * abs(qty) * 100   # multiply by 100
+        current_value = mark * abs(qty) * 100             # multiply by 100
         pnl = current_value - total_premium
         pnl_display = pnl / 100
         pnl_pct = round((pnl / total_premium * 100) if total_premium else 0, 2)
 
         action = f"{'Buy' if qty > 0 else 'Sell'} {opt_type}"
+
+        # ---------------- UK DATE FORMATTING ----------------
+        try:
+            open_date = pd.to_datetime(open_date_raw).strftime('%d/%m/%y')
+        except:
+            open_date = ''
+
+        try:
+            close_date = pd.to_datetime(close_date_raw).strftime('%d/%m/%y') if status == "Closed" else ''
+        except:
+            close_date = ''
 
         records.append({
             "Date": open_date,
@@ -119,17 +138,17 @@ def parse_positions(positions, status):
             "Expiration": exp,
             "Strike": strike,
             "Quantity": int(abs(qty)),
-            "Ask Price": ask_price,
+            "Bid/Ask Price": price_for_calc,
             "Total Premium": total_premium,
             "Current Value": current_value,
             "PnL ($)": pnl_display,
             "PnL (%)": pnl_pct,
             "Chance of Profit": round(cop * 100, 1),
             "Delta": round(delta, 3),
-            "Close Date": close_date if status == "Closed" else "",
+            "Close Date": close_date,
             "Status": status,
             "Instrument ID": instrument.get("id"),
-            "Last Updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Last Updated": datetime.now().strftime("%d/%m/%y %H:%M:%S"),
             "Robinhood Cash": cash_balance
         })
     return records
