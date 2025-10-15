@@ -13,7 +13,7 @@ low_days: 30
 
 # Expiration filter for options (only expirations 25–35 days out)
 expiry_window_days:
-  min: 25
+  min: 15
   max: 35
 
 # Plot settings
