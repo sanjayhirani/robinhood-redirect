@@ -109,8 +109,12 @@ def parse_positions(positions, status):
         })
     return records
 
+# ---------------- PARSE DATA ----------------
 open_data = parse_positions(open_positions, "Open")
 closed_data = parse_positions(closed_positions, "Closed")
+
+all_data = open_data + closed_data
+df = pd.DataFrame(all_data)  # <-- Create the DataFrame here
 
 # ---------------- WRITE TO GOOGLE SHEET ----------------
 if not df.empty:
