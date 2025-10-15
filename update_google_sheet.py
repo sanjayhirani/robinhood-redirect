@@ -141,19 +141,25 @@ closed_data = parse_positions(closed_positions, "Closed")
 all_data = open_data + closed_data
 df = pd.DataFrame(all_data)
 
-# ---------------- CLEAN DATA ----------------
+# ---------------- CLEAN DATA (JSON-safe + UK dates) ----------------
 # Replace NaN / inf with empty string for Google Sheets
 df.replace([pd.NA, None, float('inf'), float('-inf')], '', inplace=True)
 
-# UK date formatting
+# UK date formatting as strings
 for col in ["Expiration", "Open Date", "Close Date", "Last Updated"]:
     if col in df.columns:
         df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%d/%m/%y')
+        df[col] = df[col].fillna('')  # ensure NaT becomes empty string
 
-# ---------------- WRITE OPTIONS POSITIONS ----------------
+# ---------------- WRITE OPTIONS POSITIONS (JSON-safe) ----------------
 options_ws.clear()
-options_ws.update([df.columns.tolist()] + df.values.tolist())
-print(f"✅ Options Positions sheet updated with {len(df)} positions.")
+
+sheet_values = [df.columns.tolist()]  # header
+for row in df.values.tolist():
+    # convert all remaining values to string for JSON safety
+    sheet_values.append([str(cell) if cell is not None else '' for cell in row])
+
+options_ws.update(sheet_values)
 
 # Hide Instrument ID
 hid_col = df.columns.get_loc("Instrument ID") + 1
@@ -163,19 +169,22 @@ options_ws.hide_columns(hid_col)
 options_ws.freeze(1)
 set_frozen(options_ws, rows=1)
 
-# Conditional formatting PnL
+# Conditional formatting PnL (numbers interpreted correctly in Sheet)
 pnl_col = df.columns.get_loc("PnL ($)") + 1
 for i, pnl in enumerate(df["PnL ($)"], start=2):
     cell = f"{gspread.utils.rowcol_to_a1(i, pnl_col)}"
-    if pnl == '':
+    if pnl == '' or pnl is None:
         continue
-    if pnl > 0:
+    if float(pnl) > 0:
         format_cell_range(options_ws, cell, CellFormat(backgroundColor=color(0.8,1,0.8)))
-    elif pnl < 0:
+    elif float(pnl) < 0:
         format_cell_range(options_ws, cell, CellFormat(backgroundColor=color(1,0.8,0.8)))
 
-# ---------------- DASHBOARD ----------------
+print(f"✅ Options Positions sheet updated with {len(df)} positions.")
+
+# ---------------- DASHBOARD (JSON-safe) ----------------
 dashboard_ws.clear()
+
 summary = {
     "Total Open Positions": len(open_data),
     "Total Closed Positions": len(closed_data),
@@ -184,7 +193,10 @@ summary = {
     "Robinhood Cash": cash_balance
 }
 
-dashboard_ws.update([["Metric", "Value"]] + [[k, v] for k,v in summary.items()])
+# Convert all values to strings for safe JSON update
+dashboard_values = [["Metric", "Value"]]
+for k, v in summary.items():
+    dashboard_values.append([str(k), str(v)])
 
-# Additional: charts/pies can be manually added using Google Sheets chart editor or programmatically via Google Sheets API v4 (complex)
+dashboard_ws.update(dashboard_values)
 print("✅ Dashboard sheet updated.")
