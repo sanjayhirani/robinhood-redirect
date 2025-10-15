@@ -58,75 +58,55 @@ closed_positions = r.options.get_all_option_positions()  # includes closed ones 
 def parse_positions(positions, status):
     records = []
     for pos in positions:
-        try:
-            qty = float(pos.get("quantity") or 0)
-            if qty == 0 and status == "Open":
-                continue
+        qty = float(pos.get("quantity") or 0)
+        if qty == 0:  # Skip positions with zero quantity
+            continue
 
-            # Fetch instrument with fallback
-            instrument_url = pos.get("option")
-            if not instrument_url:
-                print(f"⚠️ Skipping position with missing option URL: {pos}")
-                continue
+        instrument = r.helper.request_get(pos.get("option"))
 
-            try:
-                instrument = r.helper.request_get(instrument_url)
-            except Exception as e:
-                print(f"⚠️ Failed to fetch instrument for {pos}: {e}")
-                continue
-
-            # Fetch market data with fallback
-            try:
-                market_data_list = r.options.get_option_market_data_by_id(instrument.get("id"))
-                if not market_data_list:
-                    raise Exception("Market data list is empty")
-                market_data = market_data_list[0] if isinstance(market_data_list, list) else market_data_list
-            except Exception as e:
-                print(f"⚠️ Market data fetch failed for {instrument.get('chain_symbol')}: {e}")
-                # Fallback: create empty data to allow sheet update
-                market_data = {"mark_price": 0, "delta": 0, "chance_of_profit_short": 0}
-
-            ticker = instrument.get("chain_symbol")
-            opt_type = instrument.get("type", "put").capitalize()
-            exp = instrument.get("expiration_date")
-            strike = float(instrument.get("strike_price") or 0)
-            avg_price = float(pos.get("average_price") or 0)
+        market_data_list = r.options.get_option_market_data_by_id(instrument.get("id"))
+        if not market_data_list:
+            print(f"⚠️ Market data list is empty for {instrument.get('chain_symbol')}")
+            mark = delta = cop = 0
+        else:
+            market_data = market_data_list[0]
             mark = float(market_data.get("mark_price") or 0)
             delta = float(market_data.get("delta") or 0)
             cop = float(market_data.get("chance_of_profit_short") or 0)
-            open_date = pos.get("created_at", "")[:10]
-            close_date = pos.get("updated_at", "")[:10]
 
-            total_premium = avg_price * 100 * abs(qty)
-            current_value = mark * 100 * abs(qty)
-            pnl = total_premium - current_value if status == "Open" else total_premium
-            pnl_pct = (pnl / total_premium * 100) if total_premium else 0
+        ticker = instrument.get("chain_symbol")
+        opt_type = instrument.get("type", "put").capitalize()
+        exp = instrument.get("expiration_date")
+        strike = float(instrument.get("strike_price"))
+        avg_price = float(pos.get("average_price") or 0)
+        open_date = pos.get("created_at", "")[:10]
+        close_date = pos.get("updated_at", "")[:10]
 
-            records.append({
-                "Ticker": ticker,
-                "Option Type": opt_type,
-                "Side": "Short" if qty < 0 else "Long",
-                "Expiration": exp,
-                "Strike": strike,
-                "Quantity": abs(int(qty)),
-                "Avg Price": avg_price,
-                "Mark Price": mark,
-                "Total Premium": total_premium,
-                "Current Value": current_value,
-                "PnL ($)": round(pnl, 2),
-                "PnL (%)": round(pnl_pct, 2),
-                "Chance of Profit": round(cop * 100, 1),
-                "Delta": round(delta, 3),
-                "Open Date": open_date,
-                "Close Date": close_date if status == "Closed" else "",
-                "Status": status,
-                "Last Updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            })
+        total_premium = avg_price * 100 * abs(qty)
+        current_value = mark * 100 * abs(qty)
+        pnl = total_premium - current_value if status == "Open" else total_premium
+        pnl_pct = (pnl / total_premium * 100) if total_premium else 0
 
-        except Exception as e:
-            print(f"⚠️ Failed to parse position: {pos}. Error: {e}")
-            continue
-
+        records.append({
+            "Ticker": ticker,
+            "Option Type": opt_type,
+            "Side": "Short" if qty < 0 else "Long",
+            "Expiration": exp,
+            "Strike": strike,
+            "Quantity": abs(int(qty)),
+            "Avg Price": avg_price,
+            "Mark Price": mark,
+            "Total Premium": total_premium,
+            "Current Value": current_value,
+            "PnL ($)": round(pnl, 2),
+            "PnL (%)": round(pnl_pct, 2),
+            "Chance of Profit": round(cop * 100, 1),
+            "Delta": round(delta, 3),
+            "Open Date": open_date,
+            "Close Date": close_date if status == "Closed" else "",
+            "Status": status,
+            "Last Updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
     return records
 
 open_data = parse_positions(open_positions, "Open")
