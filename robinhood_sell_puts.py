@@ -121,50 +121,65 @@ import time
 
 # ------------------ CURRENT OPEN POSITIONS ALERT (Sell Puts Only) ------------------
 try:
-    positions = r.options.get_open_option_positions()
-    if positions:
-        msg_lines = ["📋 <b>Current Open Positions</b>\n"]
+    positions = r.get_open_option_positions()
+    positions_data = []
 
-        for pos in positions:
-            qty_raw = float(pos.get("quantity") or 0)
-            if qty_raw == 0:
-                continue
-
-            contracts = abs(int(qty_raw))
-
+    for pos in positions:
+        try:
+            # --- Get option instrument info (proper endpoint) ---
             instrument_data = r.options.get_option_instrument_data_by_id(pos['option_id'])
-            ticker = instrument.get("chain_symbol")
-            strike = float(instrument.get("strike_price"))
-            exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
+            if not instrument_data:
+                print(f"⚠️ No instrument data for {pos.get('option_id')}")
+                continue
+            instrument = instrument_data[0]
 
-            avg_price_raw = float(pos.get("average_price") or 0.0)
-            md = r.options.get_option_market_data_by_id(instrument.get("id"))[0]
-            md_mark_price = float(md.get("mark_price") or 0.0)
-            mark_per_contract = md_mark_price * 100
+            # --- Get latest market data for that option ---
+            market_data_list = r.options.get_option_market_data_by_id(instrument.get("id"))
+            if not market_data_list:
+                print(f"⚠️ No market data for {instrument.get('id')}")
+                continue
+            market_data = market_data_list[0]
 
-            # PnL calculation for sell puts
+            # --- Position details ---
+            quantity = float(pos.get("quantity", 0))
+            position_type = "Buy" if quantity > 0 else "Sell"
+            contracts = abs(quantity)
+
+            avg_price_raw = float(pos.get("average_price", 0))
+            mark_price = float(market_data.get("mark_price", 0))
+            mark_per_contract = mark_price * 100  # convert to per-contract dollars
+
+            # --- Simple P/L calc (based on mark vs entry) ---
             orig_pnl = abs(avg_price_raw) * contracts
             pnl_now = orig_pnl - (mark_per_contract * contracts)
 
-            # Emoji based on 70% of original PnL
-            pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
+            positions_data.append({
+                "Type": f"{position_type} {instrument['type'].capitalize()}",
+                "Strike": instrument["strike_price"],
+                "Exp Date": instrument["expiration_date"],
+                "Qty": contracts,
+                "Avg Price": f"{avg_price_raw:.2f}",
+                "Mark": f"{mark_price:.2f}",
+                "P/L": f"{pnl_now:.2f}"
+            })
 
-            # Format each position with emojis per line
-            msg_lines.extend([
-                f"📌 <b>{ticker}</b> | 📉 Sell Put",
-                f"💲 Strike: ${strike:.2f}",
-                f"✅ Exp: {exp_date}",
-                f"📦 Qty: {contracts}",
-                f"📊 Current Price: ${float(r.stocks.get_latest_price(ticker)[0]):.2f}",
-                f"💰 Full Premium: ${orig_pnl:.2f}",
-                f"💵 Current Profit: {pnl_emoji} ${pnl_now:.2f}",
-                "────────────────────"
-            ])
+        except Exception as e:
+            print(f"⚠️ Error processing position: {e}")
+            continue
 
-        send_telegram_message("\n".join(msg_lines))
+    # --- Build and send Telegram message ---
+    if positions_data:
+        positions_table = tabulate(positions_data, headers="keys", tablefmt="pretty")
+        positions_message = (
+            f"<b>📊 Current Open Option Positions:</b>\n"
+            f"<pre>{positions_table}</pre>"
+        )
+        send_telegram_message(positions_message)
+    else:
+        send_telegram_message("No open option positions found.")
 
 except Exception as e:
-    send_telegram_message(f"Error generating current positions alert: {e}")
+    print(f"⚠️ Error generating current positions alert: {e}")
 
 # ------------------ OPTIONS SCAN (PARALLELIZED WITH THROTTLE) ------------------
 all_options = []
@@ -728,6 +743,7 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
 
 
