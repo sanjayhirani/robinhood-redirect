@@ -32,6 +32,7 @@ gc = gspread.authorize(creds)
 
 # ---------------- SHEET SETUP ----------------
 SHEET_ID = "1ANhHY6M_BT0SeKjRXtBs9Iw6mjtJHlcHaDNtM58BvQU"
+
 try:
     sh = gc.open_by_key(SHEET_ID)
 except gspread.SpreadsheetNotFound:
@@ -40,30 +41,38 @@ except gspread.SpreadsheetNotFound:
         "Ensure the service account has Editor access."
     )
 
-# Ensure sheets exist
-if "Options Positions" not in [ws.title for ws in sh.worksheets()]:
-    options_ws = sh.add_worksheet(title="Options Positions", rows="100", cols="20")
-else:
-    options_ws = sh.worksheet("Options Positions")
-
-if "Dashboard" not in [ws.title for ws in sh.worksheets()]:
-    dashboard_ws = sh.add_worksheet(title="Dashboard", rows="50", cols="20")
-else:
+# ---------------- WORKSHEET CREATION ----------------
+# Dashboard sheet
+try:
     dashboard_ws = sh.worksheet("Dashboard")
+except gspread.WorksheetNotFound:
+    dashboard_ws = sh.add_worksheet(title="Dashboard", rows=20, cols=10)
 
-print(f"✅ Sheets ready: {options_ws.title}, {dashboard_ws.title}")
+# Options positions sheet
+try:
+    options_ws = sh.worksheet("Options Positions")
+except gspread.WorksheetNotFound:
+    options_ws = sh.add_worksheet(title="Options Positions", rows=100, cols=20)
+
+print("✅ Sheets ready: Options Positions, Dashboard")
 
 # ---------------- ROBINHOOD LOGIN ----------------
 USERNAME = os.environ["RH_USERNAME"]
 PASSWORD = os.environ["RH_PASSWORD"]
 r.login(USERNAME, PASSWORD)
-account_profile = r.profiles.load_account_profile()
-rh_balance = float(account_profile.get("cash_available") or 0)
-print(f"✅ Logged in. Robinhood cash available: ${rh_balance:,.2f}")
+
+# Get cash balance
+try:
+    rh_account = r.profiles.load_account_profile()
+    cash_balance = float(rh_account.get("cash", 0))
+    print(f"✅ Logged in. Robinhood cash available: ${cash_balance:.2f}")
+except Exception as e:
+    cash_balance = 0
+    print("⚠️ Could not fetch Robinhood cash balance:", e)
 
 # ---------------- FETCH OPTIONS ----------------
 open_positions = r.options.get_open_option_positions()
-closed_positions = r.options.get_all_option_positions()
+closed_positions = r.options.get_all_option_positions()  # includes closed
 
 def parse_positions(positions, status):
     records = []
@@ -72,53 +81,49 @@ def parse_positions(positions, status):
         if qty == 0:
             continue
 
-        instrument = r.helper.request_get(pos.get("option"))
-        market_data_list = r.options.get_option_market_data_by_id(instrument.get("id"))
-
-        if not market_data_list:
-            print(f"⚠️ Market data missing for {instrument.get('chain_symbol')}")
-            mark = delta = cop = 0
-        else:
-            market_data = market_data_list[0]
-            mark = float(market_data.get("mark_price") or 0)
-            delta = float(market_data.get("delta") or 0)
-            cop = float(market_data.get("chance_of_profit_short") or 0)
-
-        ticker = instrument.get("chain_symbol")
+        instrument = r.helper.request_get(pos.get("option")) or {}
+        ticker = instrument.get("chain_symbol", "")
         opt_type = instrument.get("type", "put").capitalize()
         exp = instrument.get("expiration_date")
-        strike = float(instrument.get("strike_price"))
+        strike = float(instrument.get("strike_price") or 0)
         avg_price = float(pos.get("average_price") or 0)
         open_date = pos.get("created_at", "")[:10]
         close_date = pos.get("updated_at", "")[:10]
 
-        # Determine Buy/Sell for Call/Put
-        if opt_type == "Call":
-            side = "Buy Call" if qty > 0 else "Sell Call"
+        market_data_list = r.options.get_option_market_data_by_id(instrument.get("id") or "")
+        if market_data_list:
+            market_data = market_data_list[0]
+            mark = float(market_data.get("mark_price") or 0)
+            delta = float(market_data.get("delta") or 0)
+            cop = float(market_data.get("chance_of_profit_short") or 0)
         else:
-            side = "Buy Put" if qty > 0 else "Sell Put"
+            mark = delta = cop = 0
+
+        # Correct delta signs: puts negative
+        if opt_type.lower() == "put":
+            delta = -abs(delta)
+        else:
+            delta = abs(delta)
 
         total_premium = avg_price * 100 * abs(qty)
         current_value = mark * 100 * abs(qty)
-        pnl = total_premium - current_value if status == "Open" else total_premium
+        pnl = current_value - total_premium if status == "Open" else current_value - total_premium
         pnl_pct = (pnl / total_premium * 100) if total_premium else 0
 
-        # Correct Delta for display: puts as positive
-        if opt_type == "Put":
-            delta = abs(delta)
+        action = f"{'Buy' if qty > 0 else 'Sell'} {opt_type}"
 
         records.append({
             "Ticker": ticker,
             "Option Type": opt_type,
-            "Buy/Sell": side,
+            "Action": action,
             "Expiration": exp,
             "Strike": strike,
-            "Quantity": abs(int(qty)),
-            "Avg Price": abs(avg_price),
+            "Quantity": int(abs(qty)),
+            "Avg Price": avg_price,
             "Mark Price": mark,
-            "Total Premium": total_premium / 100,
-            "Current Value": current_value / 100,
-            "PnL ($)": pnl / 100,
+            "Total Premium": total_premium,
+            "Current Value": current_value,
+            "PnL ($)": pnl,
             "PnL (%)": round(pnl_pct, 2),
             "Chance of Profit": round(cop * 100, 1),
             "Delta": round(delta, 3),
@@ -126,73 +131,60 @@ def parse_positions(positions, status):
             "Close Date": close_date if status == "Closed" else "",
             "Status": status,
             "Instrument ID": instrument.get("id"),
-            "Last Updated": datetime.now().strftime("%d/%m/%y %H:%M:%S"),
-            "RH Balance ($)": rh_balance
+            "Last Updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Robinhood Cash": cash_balance
         })
     return records
 
-# ---------------- PARSE DATA ----------------
 open_data = parse_positions(open_positions, "Open")
 closed_data = parse_positions(closed_positions, "Closed")
 all_data = open_data + closed_data
 df = pd.DataFrame(all_data)
 
-# ---------------- WRITE TO OPTIONS POSITIONS SHEET ----------------
-if not df.empty:
-    # Format dates to UK style
-    for col in ["Expiration", "Open Date", "Close Date"]:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%d/%m/%y')
+# ---------------- CLEAN DATA ----------------
+# Replace NaN / inf with empty string for Google Sheets
+df.replace([pd.NA, None, float('inf'), float('-inf')], '', inplace=True)
 
-    options_ws.clear()
-    options_ws.update([df.columns.values.tolist()] + df.values.tolist())
-    worksheet.freeze(rows=1)
-    set_frozen(options_ws, rows=1)
-    set_basic_filter(options_ws)
+# UK date formatting
+for col in ["Expiration", "Open Date", "Close Date", "Last Updated"]:
+    if col in df.columns:
+        df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%d/%m/%y')
 
-    # Conditional formatting for PnL ($)
-    pnl_col_index = df.columns.get_loc("PnL ($)") + 1
-    green_rule = CellFormat(backgroundColor=color(0.8,1,0.8))
-    red_rule = CellFormat(backgroundColor=color(1,0.8,0.8))
-    for i, pnl in enumerate(df["PnL ($)"], start=2):
-        cell_range = f"{gspread.utils.rowcol_to_a1(i, pnl_col_index)}"
-        if pnl > 0:
-            format_cell_range(options_ws, cell_range, green_rule)
-        elif pnl < 0:
-            format_cell_range(options_ws, cell_range, red_rule)
+# ---------------- WRITE OPTIONS POSITIONS ----------------
+options_ws.clear()
+options_ws.update([df.columns.tolist()] + df.values.tolist())
+print(f"✅ Options Positions sheet updated with {len(df)} positions.")
 
-    # Hide Instrument ID column
-    col_index = df.columns.get_loc("Instrument ID") + 1
-    options_ws.hide_columns(col_index)
+# Hide Instrument ID
+hid_col = df.columns.get_loc("Instrument ID") + 1
+options_ws.hide_columns(hid_col)
 
-    # Auto resize
-    options_ws.resize(cols=len(df.columns))
-    print(f"✅ Options Positions sheet updated with {len(df)} positions.")
-else:
-    options_ws.clear()
-    options_ws.update([[f"No option positions found as of {datetime.now().strftime('%d/%m/%y %H:%M:%S')}"]])
-    print("⚠️ No option positions found.")
+# Freeze header row
+options_ws.freeze(1)
+set_frozen(options_ws, rows=1)
+
+# Conditional formatting PnL
+pnl_col = df.columns.get_loc("PnL ($)") + 1
+for i, pnl in enumerate(df["PnL ($)"], start=2):
+    cell = f"{gspread.utils.rowcol_to_a1(i, pnl_col)}"
+    if pnl == '':
+        continue
+    if pnl > 0:
+        format_cell_range(options_ws, cell, CellFormat(backgroundColor=color(0.8,1,0.8)))
+    elif pnl < 0:
+        format_cell_range(options_ws, cell, CellFormat(backgroundColor=color(1,0.8,0.8)))
 
 # ---------------- DASHBOARD ----------------
 dashboard_ws.clear()
-summary_values = [
-    ["Robinhood Total Balance ($)", rh_balance],
-    ["Total Positions", len(df)],
-    ["Total PnL ($)", df["PnL ($)"].sum() if not df.empty else 0],
-    ["Total PnL (%)", df["PnL (%)"].mean() if not df.empty else 0]
-]
-dashboard_ws.update(summary_values)
+summary = {
+    "Total Open Positions": len(open_data),
+    "Total Closed Positions": len(closed_data),
+    "Total Premiums": df["Total Premium"].sum(),
+    "Total PnL": df["PnL ($)"].sum(),
+    "Robinhood Cash": cash_balance
+}
 
-# Top 5 Gainers
-if not df.empty:
-    top5 = df.sort_values("PnL ($)", ascending=False).head(5)
-    dashboard_ws.update([["Top 5 Gainers"]])
-    dashboard_ws.update([top5.columns.values.tolist()] + top5.values.tolist(), value_input_option="RAW")
+dashboard_ws.update([["Metric", "Value"]] + [[k, v] for k,v in summary.items()])
 
-# Top 5 Losers
-if not df.empty:
-    bottom5 = df.sort_values("PnL ($)", ascending=True).head(5)
-    dashboard_ws.update([["Top 5 Losers"]], value_input_option="RAW")
-    dashboard_ws.update([bottom5.columns.values.tolist()] + bottom5.values.tolist(), value_input_option="RAW")
-
+# Additional: charts/pies can be manually added using Google Sheets chart editor or programmatically via Google Sheets API v4 (complex)
 print("✅ Dashboard sheet updated.")
