@@ -160,30 +160,35 @@ if "Open Date" in df.columns:
 
 # ---------------- WRITE OPTIONS POSITIONS (JSON-safe) ----------------
 options_ws.clear()
+
+# Prepare data for sheet
 sheet_values = [df.columns.tolist()]
 for row in df.values.tolist():
     sheet_values.append([str(cell) if cell is not None else '' for cell in row])
 
+# Update sheet
 options_ws.update(sheet_values)
 
-# Hide Instrument ID
-hid_col = df.columns.get_loc("Instrument ID") + 1
-options_ws.hide_columns(hid_col, hid_col)
+# Hide Instrument ID column
+if "Instrument ID" in df.columns:
+    hid_col = df.columns.get_loc("Instrument ID") + 1
+    options_ws.hide_columns(hid_col, hid_col)
 
 # Freeze header row
 options_ws.freeze(1)
 set_frozen(options_ws, rows=1)
 
-# Conditional formatting for PnL
-pnl_col = df.columns.get_loc("PnL ($)") + 1
-for i, pnl in enumerate(df["PnL ($)"], start=2):
-    cell = f"{gspread.utils.rowcol_to_a1(i, pnl_col)}"
-    if pnl == '' or pnl is None:
-        continue
-    if float(pnl) > 0:
-        format_cell_range(options_ws, cell, CellFormat(backgroundColor=color(0.8,1,0.8)))
-    elif float(pnl) < 0:
-        format_cell_range(options_ws, cell, CellFormat(backgroundColor=color(1,0.8,0.8)))
+# Conditional formatting for PnL ($)
+if "PnL ($)" in df.columns:
+    pnl_col = df.columns.get_loc("PnL ($)") + 1
+    for i, pnl in enumerate(df["PnL ($)"], start=2):  # start=2 to skip header
+        cell = f"{gspread.utils.rowcol_to_a1(i, pnl_col)}"
+        if pnl == '' or pnl is None:
+            continue
+        if float(pnl) > 0:
+            format_cell_range(options_ws, cell, CellFormat(backgroundColor=color(0.8,1,0.8)))
+        elif float(pnl) < 0:
+            format_cell_range(options_ws, cell, CellFormat(backgroundColor=color(1,0.8,0.8)))
 
 print(f"✅ Options Positions sheet updated with {len(df)} positions.")
 
