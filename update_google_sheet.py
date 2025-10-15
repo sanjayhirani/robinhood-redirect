@@ -151,6 +151,13 @@ for col in ["Expiration", "Open Date", "Close Date", "Last Updated"]:
         df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%d/%m/%y')
         df[col] = df[col].fillna('')
 
+# ---------------- MOVE "Open Date" TO FIRST COLUMN AND RENAME ----------------
+if "Open Date" in df.columns:
+    df.rename(columns={"Open Date": "Date Opened"}, inplace=True)
+    cols = df.columns.tolist()
+    cols.insert(0, cols.pop(cols.index("Date Opened")))
+    df = df[cols]
+
 # ---------------- WRITE OPTIONS POSITIONS (JSON-safe) ----------------
 options_ws.clear()
 sheet_values = [df.columns.tolist()]
