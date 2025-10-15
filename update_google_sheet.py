@@ -29,6 +29,18 @@ creds = Credentials.from_service_account_info(
 )
 gc = gspread.authorize(creds)
 
+# Debug: List all sheets the service account can see
+try:
+    sheet_list = gc.list_spreadsheet_files()
+    print("Service account can see the following sheets:")
+    for s in sheet_list:
+        print(f"- {s['name']} (ID: {s['id']})")
+except Exception as e:
+    print(f"Error listing sheets: {e}")
+
+# Check the service account email being used
+print(f"Using service account: {creds.service_account_email}")
+
 # ---------------- SHEET SETUP ----------------
 SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME", "Robinhood Options Tracker")
 
