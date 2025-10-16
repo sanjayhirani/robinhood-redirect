@@ -84,34 +84,42 @@ def parse_positions(positions, status):
         exp = instrument.get("expiration_date")
         strike = float(instrument.get("strike_price") or 0)
         avg_price = float(pos.get("average_price") or 0)
-        avg_price_display = abs(avg_price) / 100  # per-option price
+        avg_price_display = abs(avg_price) / 100   # scaled per-option for display
         open_date = pos.get("created_at", "")[:10]
         close_date = pos.get("updated_at", "")[:10]
 
-        # Fetch the filled order history for the option
-        filled_orders = r.orders.get_all_option_orders(instrument.get("id"))
-        est_credit = 0
-        for order in filled_orders:
-            if order.get("state") == "filled" and order.get("side") == "sell":
-                est_credit = float(order.get("credit_or_debit", 0))
-                break
+        # Fetch market data
+        market_data_list = r.options.get_option_market_data_by_id(instrument.get("id") or "")
+        if market_data_list:
+            market_data = market_data_list[0]
+            delta = float(market_data.get("delta") or 0)
+            cop = float(market_data.get("chance_of_profit_short") or 0)
+        else:
+            delta = cop = 0
+
+        delta = abs(delta)  # Correct delta signs
 
         # ---------------- CALCULATIONS ----------------
-        total_premium_display = abs(est_credit * qty)
-        pnl_display = -total_premium_display  # placeholder for PnL
+        # Total Premium = actual value from Robinhood (not scaled)
+        total_premium_display = abs(avg_price)
+
+        # PnL ($) = placeholder if mark price is not used
+        pnl_display = - total_premium_display
+
+        action = f"{'Buy' if qty > 0 else 'Sell'} {opt_type}"
 
         records.append({
             "Ticker": ticker,
             "Option Type": opt_type,
-            "Action": f"{'Buy' if qty > 0 else 'Sell'} {opt_type}",
+            "Action": action,
             "Expiration": exp,
             "Strike": strike,
             "Quantity": int(abs(qty)),
             "Avg Price": avg_price_display,
             "Total Premium": total_premium_display,
             "PnL ($)": pnl_display,
-            "Chance of Profit": 0,  # Placeholder
-            "Delta": 0,  # Placeholder
+            "Chance of Profit": round(cop * 100, 1),
+            "Delta": round(delta, 3),
             "Open Date": open_date,
             "Close Date": close_date if status == "Closed" else "",
             "Status": status,
