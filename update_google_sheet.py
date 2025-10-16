@@ -91,27 +91,24 @@ def parse_positions(positions, status):
         market_data_list = r.options.get_option_market_data_by_id(instrument.get("id") or "")
         if market_data_list:
             market_data = market_data_list[0]
-            mark = float(market_data.get("mark_price") or 0)
             delta = float(market_data.get("delta") or 0)
             cop = float(market_data.get("chance_of_profit_short") or 0)
         else:
-            mark = delta = cop = 0
+            delta = cop = 0
 
         # Correct delta signs
         if opt_type.lower() == "put":
-            delta = abs(delta)  # puts are always negative
+            delta = abs(delta)
         else:
-            delta = abs(delta)   # calls always positive
+            delta = abs(delta)
 
         # ---------------- CALCULATIONS ----------------
         total_premium = abs(avg_price * qty)
         total_premium_display = total_premium / 100      # divide by 100, positive
 
-        current_value = mark * qty
-        pnl = current_value - avg_price * qty
-        pnl_display = pnl / 100                           # divide by 100
-
-        pnl_pct = round((pnl / total_premium * 100) if total_premium else 0, 2)
+        # PnL relative to zero, since we have no market price
+        pnl_display = - total_premium_display
+        pnl_pct = -100.0  # 100% loss if position were worthless
 
         action = f"{'Buy' if qty > 0 else 'Sell'} {opt_type}"
 
@@ -123,9 +120,7 @@ def parse_positions(positions, status):
             "Strike": strike,
             "Quantity": int(abs(qty)),
             "Avg Price": avg_price,
-            "Mark Price": mark,
             "Total Premium": total_premium_display,
-            "Current Value": current_value,
             "PnL ($)": pnl_display,
             "PnL (%)": pnl_pct,
             "Chance of Profit": round(cop * 100, 1),
