@@ -142,6 +142,13 @@ for col in ["Expiration", "Open Date", "Close Date", "Last Updated"]:
         df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%d/%m/%y')
         df[col] = df[col].fillna('')
 
+# ---------------- FORCE OPTION TYPE TO "Sell Call"/"Sell Put" AND REMOVE ACTION ----------------
+if "Option Type" in df.columns:
+    df["Option Type"] = df["Option Type"].apply(lambda x: f"Sell {x}")
+
+if "Action" in df.columns:
+    df.drop(columns=["Action"], inplace=True)
+
 # ---------------- MOVE "Open Date" TO FIRST COLUMN AND RENAME ----------------
 if "Open Date" in df.columns:
     df.rename(columns={"Open Date": "Date Opened"}, inplace=True)
