@@ -97,17 +97,11 @@ def parse_positions(positions, status):
         else:
             mark = delta = cop = 0
 
-        # Correct delta signs: puts negative
+        # Correct delta signs
         if opt_type.lower() == "put":
-            delta = -abs(delta)
+            delta = -abs(delta)  # puts are always negative
         else:
-            delta = abs(delta)
-        
-        action = f"{'Buy' if qty > 0 else 'Sell'} {opt_type}"
-
-        # Ensure Sell Calls always show positive delta
-        if "Sell" in action and opt_type.lower() == "call":
-            delta = abs(delta)
+            delta = -abs(delta)   # calls always positive
 
         # ---------------- CALCULATIONS ----------------
         total_premium = abs(avg_price * qty)
