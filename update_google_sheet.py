@@ -108,7 +108,6 @@ def parse_positions(positions, status):
 
         # PnL relative to zero, since we have no market price
         pnl_display = - total_premium_display
-        pnl_pct = -100.0  # 100% loss if position were worthless
 
         action = f"{'Buy' if qty > 0 else 'Sell'} {opt_type}"
 
@@ -122,7 +121,6 @@ def parse_positions(positions, status):
             "Avg Price": avg_price,
             "Total Premium": total_premium_display,
             "PnL ($)": pnl_display,
-            "PnL (%)": pnl_pct,
             "Chance of Profit": round(cop * 100, 1),
             "Delta": round(delta, 3),
             "Open Date": open_date,
