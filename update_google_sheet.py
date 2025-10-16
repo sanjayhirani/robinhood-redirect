@@ -84,6 +84,7 @@ def parse_positions(positions, status):
         exp = instrument.get("expiration_date")
         strike = float(instrument.get("strike_price") or 0)
         avg_price = float(pos.get("average_price") or 0)
+        avg_price = abs(avg_price)
         open_date = pos.get("created_at", "")[:10]
         close_date = pos.get("updated_at", "")[:10]
 
@@ -100,6 +101,12 @@ def parse_positions(positions, status):
         if opt_type.lower() == "put":
             delta = -abs(delta)
         else:
+            delta = abs(delta)
+        
+        action = f"{'Buy' if qty > 0 else 'Sell'} {opt_type}"
+
+        # Ensure Sell Calls always show positive delta
+        if "Sell" in action and opt_type.lower() == "call":
             delta = abs(delta)
 
         # ---------------- CALCULATIONS ----------------
