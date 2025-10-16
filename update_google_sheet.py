@@ -99,9 +99,9 @@ def parse_positions(positions, status):
 
         # Correct delta signs
         if opt_type.lower() == "put":
-            delta = -abs(delta)  # puts are always negative
+            delta = abs(delta)  # puts are always negative
         else:
-            delta = -abs(delta)   # calls always positive
+            delta = abs(delta)   # calls always positive
 
         # ---------------- CALCULATIONS ----------------
         total_premium = abs(avg_price * qty)
