@@ -76,7 +76,7 @@ def parse_positions(positions, status):
     records = []
     for pos in positions:
         qty = float(pos.get("quantity") or 0)
-        if qty <= 0:  # Only include positions with quantity above 0
+        if qty <= 0:  # skip zero-quantity positions
             continue
 
         instrument = r.helper.request_get(pos.get("option")) or {}
@@ -123,9 +123,20 @@ def parse_positions(positions, status):
 
 # ---------------- COMBINE OPEN AND CLOSED ----------------
 open_data = parse_positions(open_positions, "Open")
-closed_data = parse_positions(closed_positions, "Closed")
 
-# Simply combine all positions with qty > 0
+# Build a set of open positions based on Ticker + Strike + Expiration
+open_keys = {(pos["Ticker"], pos["Strike"], pos["Expiration"]) for pos in open_data}
+
+# Parse all closed positions
+closed_data_raw = parse_positions(closed_positions, "Closed")
+
+# Keep only closed positions that are not currently open
+closed_data = [
+    pos for pos in closed_data_raw
+    if (pos["Ticker"], pos["Strike"], pos["Expiration"]) not in open_keys
+]
+
+# Combine final positions
 all_data = open_data + closed_data
 df = pd.DataFrame(all_data)
 
