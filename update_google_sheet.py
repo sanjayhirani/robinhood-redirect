@@ -76,9 +76,7 @@ def parse_positions(positions, status):
     records = []
     for pos in positions:
         qty = float(pos.get("quantity") or 0)
-
-        # Skip zero-quantity positions
-        if qty <= 0:
+        if qty <= 0:  # Only include positions with quantity above 0
             continue
 
         instrument = r.helper.request_get(pos.get("option")) or {}
@@ -102,8 +100,6 @@ def parse_positions(positions, status):
             delta = cop = mark_price = 0
 
         delta = abs(delta)
-
-        # Real-time PnL (positive)
         pnl_display = abs((mark_price - avg_price_display) * qty * 100)
 
         records.append({
@@ -129,7 +125,7 @@ def parse_positions(positions, status):
 open_data = parse_positions(open_positions, "Open")
 closed_data = parse_positions(closed_positions, "Closed")
 
-# Simply combine all positions, no deduplication, no filtering
+# Simply combine all positions with qty > 0
 all_data = open_data + closed_data
 df = pd.DataFrame(all_data)
 
