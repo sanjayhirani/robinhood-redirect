@@ -149,7 +149,7 @@ if "Open Date" in df.columns:
     cols.insert(0, cols.pop(cols.index("Date Opened")))
     df = df[cols]
 
-# ---------------- WRITE OPTIONS POSITIONS (JSON-safe) ----------------
+# ---------------- WRITE OPTIONS POSITIONS (ALL-INCLUSIVE) ----------------
 options_ws.clear()
 
 # Prepare data for sheet
@@ -160,28 +160,20 @@ for row in df.values.tolist():
 # Update sheet
 options_ws.update(sheet_values)
 
-# Hide Instrument ID column
-if "Instrument ID" in df.columns:
-    hid_col = df.columns.get_loc("Instrument ID") + 1
-    options_ws.hide_columns(hid_col, hid_col)
-
 # Freeze header row
 options_ws.freeze(1)
 set_frozen(options_ws, rows=1)
 
-# Conditional formatting for PnL ($)
-if "PnL ($)" in df.columns:
-    pnl_col = df.columns.get_loc("PnL ($)") + 1
-    for i, pnl in enumerate(df["PnL ($)"], start=2):  # start=2 to skip header
-        cell = f"{gspread.utils.rowcol_to_a1(i, pnl_col)}"
-        if pnl == '' or pnl is None:
-            continue
-        if float(pnl) > 0:
-            format_cell_range(options_ws, cell, CellFormat(backgroundColor=color(0.8,1,0.8)))
-        elif float(pnl) < 0:
-            format_cell_range(options_ws, cell, CellFormat(backgroundColor=color(1,0.8,0.8)))
+# Apply a basic filter on the Quantity column (F, index 5) to allow hiding zero-quantity rows
+options_ws.set_basic_filter(
+    start_row_index=0,
+    end_row_index=len(sheet_values),
+    start_column_index=5,
+    end_column_index=6
+)
 
-print(f"✅ Options Positions sheet updated with {len(df)} positions.")
+print(f"✅ Options Positions sheet updated with {len(df)} rows (all-inclusive).")
+print("Use the Quantity filter in the sheet to hide rows where Quantity = 0.")
 
 # ---------------- DASHBOARD (JSON-safe) ----------------
 dashboard_ws.clear()
