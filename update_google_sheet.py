@@ -72,12 +72,12 @@ open_positions = r.options.get_open_option_positions()
 closed_positions = r.options.get_all_option_positions()  # includes closed
 
 # ---------------- PARSE POSITIONS ----------------
-def parse_positions_final(positions, status):
+def parse_positions(positions, status):
     records = []
     for pos in positions:
         qty = float(pos.get("quantity") or 0)
 
-        # Skip zero quantity positions
+        # Skip zero-quantity positions
         if qty <= 0:
             continue
 
@@ -120,17 +120,16 @@ def parse_positions_final(positions, status):
             "Open Date": open_date,
             "Close Date": close_date if status == "Closed" else "",
             "Status": status,
-            "Instrument ID": instrument.get("id"),
             "Last Updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "Robinhood Cash": cash_balance
         })
     return records
 
 # ---------------- COMBINE OPEN AND CLOSED ----------------
-open_data = parse_positions_final(open_positions, "Open")
-closed_data = parse_positions_final(closed_positions, "Closed")
+open_data = parse_positions(open_positions, "Open")
+closed_data = parse_positions(closed_positions, "Closed")
 
-# Combine all positions (no deduplication, no filtering)
+# Simply combine all positions, no deduplication, no filtering
 all_data = open_data + closed_data
 df = pd.DataFrame(all_data)
 
