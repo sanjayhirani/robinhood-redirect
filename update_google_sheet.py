@@ -75,7 +75,8 @@ def parse_positions_real_pnl(positions, status):
     records = []
     for pos in positions:
         qty = float(pos.get("quantity") or 0)
-        if qty == 0:
+        # Include closed positions even if quantity is 0
+        if qty == 0 and status != "Closed":
             continue
 
         instrument = r.helper.request_get(pos.get("option")) or {}
