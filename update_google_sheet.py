@@ -102,7 +102,8 @@ def parse_positions_real_pnl(positions, status):
 
         # ---------------- CALCULATIONS ----------------
         total_premium_display = abs(avg_price)
-        pnl_display = (mark_price - avg_price_display) * qty * 100
+        # Corrected PnL calculation
+        pnl_display = abs((mark_price - avg_price_display) * qty * 100)
 
         action = f"{'Buy' if qty > 0 else 'Sell'} {opt_type}"
 
