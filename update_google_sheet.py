@@ -71,7 +71,7 @@ except Exception as e:
 open_positions = r.options.get_open_option_positions()
 closed_positions = r.options.get_all_option_positions()  # includes closed
 
-def parse_positions(positions, status):
+def parse_positions_real_pnl(positions, status):
     records = []
     for pos in positions:
         qty = float(pos.get("quantity") or 0)
@@ -84,27 +84,25 @@ def parse_positions(positions, status):
         exp = instrument.get("expiration_date")
         strike = float(instrument.get("strike_price") or 0)
         avg_price = float(pos.get("average_price") or 0)
-        avg_price_display = abs(avg_price) / 100   # scaled per-option for display
+        avg_price_display = abs(avg_price) / 100   # scaled for display
         open_date = pos.get("created_at", "")[:10]
         close_date = pos.get("updated_at", "")[:10]
 
-        # Fetch market data
+        # Fetch current market price
         market_data_list = r.options.get_option_market_data_by_id(instrument.get("id") or "")
         if market_data_list:
             market_data = market_data_list[0]
             delta = float(market_data.get("delta") or 0)
             cop = float(market_data.get("chance_of_profit_short") or 0)
+            mark_price = float(market_data.get("mark_price") or 0)
         else:
-            delta = cop = 0
+            delta = cop = mark_price = 0
 
-        delta = abs(delta)  # Correct delta signs
+        delta = abs(delta)  # Optional: keep sign if you prefer
 
         # ---------------- CALCULATIONS ----------------
-        # Total Premium = actual value from Robinhood (not scaled)
         total_premium_display = abs(avg_price)
-
-        # PnL ($) = placeholder if mark price is not used
-        pnl_display = - total_premium_display
+        pnl_display = (mark_price - avg_price_display) * qty * 100
 
         action = f"{'Buy' if qty > 0 else 'Sell'} {opt_type}"
 
@@ -117,7 +115,7 @@ def parse_positions(positions, status):
             "Quantity": int(abs(qty)),
             "Avg Price": avg_price_display,
             "Total Premium": total_premium_display,
-            "PnL ($)": pnl_display,
+            "PnL ($)": round(pnl_display, 2),
             "Chance of Profit": round(cop * 100, 1),
             "Delta": round(delta, 3),
             "Open Date": open_date,
@@ -129,10 +127,15 @@ def parse_positions(positions, status):
         })
     return records
 
-open_data = parse_positions(open_positions, "Open")
-closed_data = parse_positions(closed_positions, "Closed")
+# ---------------- COMBINE AND DEDUP ----------------
+open_data = parse_positions_real_pnl(open_positions, "Open")
+closed_data = parse_positions_real_pnl(closed_positions, "Closed")
 all_data = open_data + closed_data
+
+# Keep only latest status for each Instrument ID
 df = pd.DataFrame(all_data)
+df.sort_values(by=["Last Updated"], ascending=False, inplace=True)
+df = df.drop_duplicates(subset=["Instrument ID"], keep="first")
 
 # ---------------- CLEAN DATA (JSON-safe + UK dates) ----------------
 df.replace([pd.NA, None, float('inf'), float('-inf')], '', inplace=True)
