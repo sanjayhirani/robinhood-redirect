@@ -102,7 +102,11 @@ def parse_positions(positions, status):
         delta = abs(delta)
         pnl_display = abs((mark_price - avg_price_display) * qty * 100)
 
+        # internal key to track duplicates
+        key = (ticker, strike, exp, status)
+
         records.append({
+            "key": key,  # internal only
             "Ticker": ticker,
             "Option Type": opt_type,
             "Expiration": exp,
@@ -124,20 +128,21 @@ def parse_positions(positions, status):
 # ---------------- COMBINE OPEN AND CLOSED ----------------
 open_data = parse_positions(open_positions, "Open")
 
-# Build a set of open positions based on Ticker + Strike + Expiration
-open_keys = {(pos["Ticker"], pos["Strike"], pos["Expiration"]) for pos in open_data}
+# Track open keys internally to avoid counting them as closed
+open_keys = {pos["key"] for pos in open_data}
 
-# Parse all closed positions
 closed_data_raw = parse_positions(closed_positions, "Closed")
 
 # Keep only closed positions that are not currently open
-closed_data = [
-    pos for pos in closed_data_raw
-    if (pos["Ticker"], pos["Strike"], pos["Expiration"]) not in open_keys
-]
+closed_data = [pos for pos in closed_data_raw if pos["key"] not in open_keys]
 
 # Combine final positions
 all_data = open_data + closed_data
+
+# Remove internal tracking key before making DataFrame
+for pos in all_data:
+    pos.pop("key", None)
+
 df = pd.DataFrame(all_data)
 
 # ---------------- CLEAN DATA (JSON-safe + UK dates) ----------------
