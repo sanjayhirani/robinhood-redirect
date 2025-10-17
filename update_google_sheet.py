@@ -71,6 +71,7 @@ except Exception as e:
 open_positions = r.options.get_open_option_positions()
 closed_positions = r.options.get_all_option_positions()  # includes closed
 
+# ---------------- PARSE POSITIONS ----------------
 def parse_positions_final(positions, status):
     records = []
     for pos in positions:
@@ -125,11 +126,20 @@ def parse_positions_final(positions, status):
         })
     return records
 
-# Parse positions
+# ---------------- COMBINE OPEN AND CLOSED ----------------
+# Parse open positions
 open_data = parse_positions_final(open_positions, "Open")
-closed_data = parse_positions_final(closed_positions, "Closed")
 
-# Combine all positions without deduplication
+# Track all open Instrument IDs
+open_ids = {pos["Instrument ID"] for pos in open_data}
+
+# Parse all positions as closed
+closed_data_raw = parse_positions_final(closed_positions, "Closed")
+
+# Include only truly closed positions (not currently open)
+closed_data = [pos for pos in closed_data_raw if pos["Instrument ID"] not in open_ids]
+
+# Combine all positions
 all_data = open_data + closed_data
 df = pd.DataFrame(all_data)
 
