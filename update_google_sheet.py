@@ -77,7 +77,7 @@ def parse_positions_final(positions, status):
     for pos in positions:
         qty = float(pos.get("quantity") or 0)
 
-        # Skip positions with zero quantity
+        # Skip zero quantity positions
         if qty <= 0:
             continue
 
@@ -127,19 +127,10 @@ def parse_positions_final(positions, status):
     return records
 
 # ---------------- COMBINE OPEN AND CLOSED ----------------
-# Parse open positions
 open_data = parse_positions_final(open_positions, "Open")
+closed_data = parse_positions_final(closed_positions, "Closed")
 
-# Track all open Instrument IDs
-open_ids = {pos["Instrument ID"] for pos in open_data}
-
-# Parse all positions as closed
-closed_data_raw = parse_positions_final(closed_positions, "Closed")
-
-# Include only truly closed positions (not currently open)
-closed_data = [pos for pos in closed_data_raw if pos["Instrument ID"] not in open_ids]
-
-# Combine all positions
+# Combine all positions (no deduplication, no filtering)
 all_data = open_data + closed_data
 df = pd.DataFrame(all_data)
 
