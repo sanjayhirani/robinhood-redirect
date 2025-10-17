@@ -71,13 +71,11 @@ except Exception as e:
 open_positions = r.options.get_open_option_positions()
 closed_positions = r.options.get_all_option_positions()  # includes closed
 
-# ---------------- PARSE POSITIONS ----------------
-def parse_positions(positions, status):
+# ---------------- PARSE POSITIONS (NO FILTERS) ----------------
+def parse_positions_all(positions, status):
     records = []
     for pos in positions:
         qty = float(pos.get("quantity") or 0)
-        if qty <= 0:  # skip zero-quantity positions
-            continue
 
         instrument = r.helper.request_get(pos.get("option")) or {}
         ticker = instrument.get("chain_symbol", "")
@@ -102,11 +100,7 @@ def parse_positions(positions, status):
         delta = abs(delta)
         pnl_display = abs((mark_price - avg_price_display) * qty * 100)
 
-        # internal key to track duplicates
-        key = (ticker, strike, exp, status)
-
         records.append({
-            "key": key,  # internal only
             "Ticker": ticker,
             "Option Type": opt_type,
             "Expiration": exp,
@@ -126,23 +120,11 @@ def parse_positions(positions, status):
     return records
 
 # ---------------- COMBINE OPEN AND CLOSED ----------------
-open_data = parse_positions(open_positions, "Open")
+open_data = parse_positions_all(open_positions, "Open")
+closed_data = parse_positions_all(closed_positions, "Closed")
 
-# Track open keys internally to avoid counting them as closed
-open_keys = {pos["key"] for pos in open_data}
-
-closed_data_raw = parse_positions(closed_positions, "Closed")
-
-# Keep only closed positions that are not currently open
-closed_data = [pos for pos in closed_data_raw if pos["key"] not in open_keys]
-
-# Combine final positions
+# Simply combine all rows — NO filters, NO deduplication
 all_data = open_data + closed_data
-
-# Remove internal tracking key before making DataFrame
-for pos in all_data:
-    pos.pop("key", None)
-
 df = pd.DataFrame(all_data)
 
 # ---------------- CLEAN DATA (JSON-safe + UK dates) ----------------
