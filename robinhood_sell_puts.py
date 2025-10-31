@@ -36,14 +36,13 @@ TICKERS_RAW = [line.strip() for line in open(TICKERS_FILE, encoding="utf-8") if 
 TICKERS = [re.sub(r'[^A-Z0-9.-]', '', t.upper()) for t in TICKERS_RAW]
 
 # ------------------ SECRETS ------------------
-
 USERNAME = os.environ["RH_USERNAME"]
 PASSWORD = os.environ["RH_PASSWORD"]
+SESSION_JSON = os.environ.get("RH_SESSION_TOKEN")  # GitHub Secret
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 # ------------------ TELEGRAM UTILITIES ------------------
-
 def send_telegram_message(msg):
     requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
@@ -51,8 +50,18 @@ def send_telegram_message(msg):
     )
 
 # ------------------ LOGIN ------------------
+# Write the stored session JSON to file so robin_stocks can reuse it
+if SESSION_JSON:
+    from pathlib import Path
+    token_dir = Path.home() / ".tokens"
+    token_dir.mkdir(parents=True, exist_ok=True)
+    session_file = token_dir / "robinhood"
+    with open(session_file, "w") as f:
+        f.write(SESSION_JSON)
 
-r.login(USERNAME, PASSWORD)
+# Login using the stored session; 2FA will be bypassed
+r.login(username=USERNAME, password=PASSWORD, store_session=True)
+
 today = datetime.now().date()
 cutoff = today + timedelta(days=config.get("expiry_limit_days", 30))
 
@@ -740,3 +749,4 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
