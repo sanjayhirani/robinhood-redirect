@@ -18,7 +18,7 @@ def ensure_package(pkg_name):
     except ImportError:
         subprocess.check_call([os.sys.executable, "-m", "pip", "install", pkg_name])
 
-for pkg in ["pandas","numpy","requests","robin_stocks","yfinance","PyYAML"]:
+for pkg in ["pandas","numpy","requests","robin_stocks","yfinance","PyYAML","pyotp"]:
     ensure_package(pkg)
 
 # ------------------ LOAD CONFIG ------------------
@@ -52,7 +52,26 @@ def send_telegram_message(msg):
 
 # ------------------ LOGIN ------------------
 
-r.login(USERNAME, PASSWORD)
+# ------------------ LOGIN ------------------
+import pyotp
+
+# Use TOTP-based 2FA if available
+if "RH_TOTP" in os.environ:
+    try:
+        totp = pyotp.TOTP(os.environ["RH_TOTP"]).now()
+        r.login(username=USERNAME, password=PASSWORD, mfa_code=totp)
+        send_telegram_message("✅ Robinhood login successful via TOTP 2FA.")
+    except Exception as e:
+        send_telegram_message(f"❌ Robinhood login failed (TOTP): {e}")
+        raise
+else:
+    try:
+        r.login(username=USERNAME, password=PASSWORD)
+        send_telegram_message("✅ Robinhood login successful (no TOTP).")
+    except Exception as e:
+        send_telegram_message(f"❌ Robinhood login failed: {e}")
+        raise
+
 today = datetime.now().date()
 cutoff = today + timedelta(days=config.get("expiry_limit_days", 30))
 
