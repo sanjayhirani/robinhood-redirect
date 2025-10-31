@@ -39,37 +39,41 @@ TICKERS = [re.sub(r'[^A-Z0-9.-]', '', t.upper()) for t in TICKERS_RAW]
 
 USERNAME = os.environ["RH_USERNAME"]
 PASSWORD = os.environ["RH_PASSWORD"]
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # ------------------ TELEGRAM UTILITIES ------------------
 
 def send_telegram_message(msg):
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
-    )
-
-# ------------------ LOGIN ------------------
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
+        )
+    else:
+        # fallback: print if Telegram is not set
+        print(msg)
 
 # ------------------ LOGIN ------------------
 import pyotp
 
 # Use TOTP-based 2FA if available
-if "RH_TOTP" in os.environ:
+TOTP_SECRET = os.environ.get("RH_TOTP")
+if TOTP_SECRET:
     try:
-        totp = pyotp.TOTP(os.environ["RH_TOTP"]).now()
+        totp = pyotp.TOTP(TOTP_SECRET).now()
+        print(f"🔑 Current TOTP code: {totp}")  # <-- print for debugging
         r.login(username=USERNAME, password=PASSWORD, mfa_code=totp)
         send_telegram_message("✅ Robinhood login successful via TOTP 2FA.")
     except Exception as e:
-        send_telegram_message(f"❌ Robinhood login failed (TOTP): {e}")
+        print(f"❌ Robinhood login failed (TOTP): {e}")
         raise
 else:
     try:
         r.login(username=USERNAME, password=PASSWORD)
         send_telegram_message("✅ Robinhood login successful (no TOTP).")
     except Exception as e:
-        send_telegram_message(f"❌ Robinhood login failed: {e}")
+        print(f"❌ Robinhood login failed: {e}")
         raise
 
 today = datetime.now().date()
@@ -759,3 +763,4 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
