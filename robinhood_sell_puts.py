@@ -18,7 +18,7 @@ def ensure_package(pkg_name):
     except ImportError:
         subprocess.check_call([os.sys.executable, "-m", "pip", "install", pkg_name])
 
-for pkg in ["pandas","numpy","requests","robin_stocks","yfinance","PyYAML","pyotp"]:
+for pkg in ["pandas","numpy","requests","robin_stocks","yfinance","PyYAML"]:
     ensure_package(pkg)
 
 # ------------------ LOAD CONFIG ------------------
@@ -39,43 +39,20 @@ TICKERS = [re.sub(r'[^A-Z0-9.-]', '', t.upper()) for t in TICKERS_RAW]
 
 USERNAME = os.environ["RH_USERNAME"]
 PASSWORD = os.environ["RH_PASSWORD"]
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 # ------------------ TELEGRAM UTILITIES ------------------
 
 def send_telegram_message(msg):
-    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
-        )
-    else:
-        # fallback: print if Telegram is not set
-        print(msg)
+    requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
+    )
 
 # ------------------ LOGIN ------------------
-import pyotp
 
-# Use TOTP-based 2FA if available
-TOTP_SECRET = os.environ.get("RH_TOTP")
-if TOTP_SECRET:
-    try:
-        totp = pyotp.TOTP(TOTP_SECRET).now()
-        print(f"🔑 Current TOTP code: {totp}")  # <-- print for debugging
-        r.login(username=USERNAME, password=PASSWORD, mfa_code=totp)
-        send_telegram_message("✅ Robinhood login successful via TOTP 2FA.")
-    except Exception as e:
-        print(f"❌ Robinhood login failed (TOTP): {e}")
-        raise
-else:
-    try:
-        r.login(username=USERNAME, password=PASSWORD)
-        send_telegram_message("✅ Robinhood login successful (no TOTP).")
-    except Exception as e:
-        print(f"❌ Robinhood login failed: {e}")
-        raise
-
+r.login(USERNAME, PASSWORD)
 today = datetime.now().date()
 cutoff = today + timedelta(days=config.get("expiry_limit_days", 30))
 
@@ -763,4 +740,3 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
-
