@@ -52,7 +52,9 @@ def send_telegram_message(msg):
 
 # ------------------ LOGIN ------------------
 
-r.login(USERNAME, PASSWORD)
+REFRESH_TOKEN = os.environ["RH_REFRESH_TOKEN"]
+r.login(username=USERNAME, password=PASSWORD, store_session=False, mfa_code=None, refresh_token=REFRESH_TOKEN)
+
 today = datetime.now().date()
 cutoff = today + timedelta(days=config.get("expiry_limit_days", 30))
 
@@ -740,6 +742,7 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
 
 
