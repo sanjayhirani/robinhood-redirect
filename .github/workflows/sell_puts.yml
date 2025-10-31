@@ -43,6 +43,7 @@ jobs:
         env:
           RH_USERNAME: ${{ secrets.RH_USERNAME }}
           RH_PASSWORD: ${{ secrets.RH_PASSWORD }}
+          RH_REFRESH_TOKEN: ${{ secrets.RH_REFRESH_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python robinhood_sell_puts.py
