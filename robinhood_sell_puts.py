@@ -119,6 +119,64 @@ send_telegram_message("\n".join(summary_lines))
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
+# ------------------ UPCOMING MAJOR US ECONOMIC EVENTS ALERT ------------------
+import requests
+from datetime import datetime, timedelta
+
+def fetch_us_economic_events(api_key, days=7):
+    """
+    Fetch upcoming US economic events from Financial Modeling Prep API.
+    Returns a list of events.
+    """
+    today = datetime.now().date()
+    to_date = today + timedelta(days=days)
+    
+    url = (
+        f"https://financialmodelingprep.com/api/v3/economic_calendar?"
+        f"from={today.isoformat()}&to={to_date.isoformat()}&apikey={api_key}"
+    )
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return data
+    except Exception as e:
+        send_telegram_message(f"Error fetching US economic events: {e}")
+        return []
+
+# Get API key from config
+API_KEY = config.get("economic_calendar_api_key")
+
+if API_KEY:
+    events = fetch_us_economic_events(API_KEY, days=7)
+    # Filter only US and high-impact events
+    us_events = [
+        ev for ev in events
+        if ev.get("country") in ("US", "United States")
+           and ev.get("impact","").lower() in ("high", "high impact", "1")  # adjust based on API response
+    ]
+
+    # Prepare Telegram message
+    lines = ["<b>📰 Upcoming Major US Economic/News Events (next 7 days)</b>\n"]
+    if us_events:
+        for ev in us_events:
+            date = ev.get("date") or ev.get("release_date") or ev.get("event_date")
+            time = ev.get("time", "")
+            name = ev.get("event") or ev.get("report") or ev.get("indicator")
+            forecast = ev.get("consensus") or ev.get("forecast")
+            lines.append(
+                f"{date} {time} — {name}" + (f" (Forecast: {forecast})" if forecast else "")
+            )
+    else:
+        lines.append("No high-impact US events found in the next 7 days.")
+    
+    send_telegram_message("\n".join(lines))
+else:
+    send_telegram_message(
+        "<b>📰 Upcoming Major US Economic/News Events (next 7 days)</b>\n"
+        "No API key configured for economic calendar."
+    )
+
 # ------------------ CURRENT OPEN POSITIONS ALERT (Sell Calls & Puts) ------------------
 try:
     positions = r.options.get_open_option_positions()
@@ -740,3 +798,4 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
