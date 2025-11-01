@@ -119,7 +119,7 @@ send_telegram_message("\n".join(summary_lines))
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
-# ------------------ UPCOMING MAJOR US ECONOMIC EVENTS ALERT ------------------
+# ------------------ UPCOMING HIGH-IMPACT US ECONOMIC EVENTS ALERT ------------------
 import requests
 from datetime import datetime, timedelta
 
@@ -144,36 +144,59 @@ def fetch_us_economic_events(api_key, days=7):
         send_telegram_message(f"Error fetching US economic events: {e}")
         return []
 
+def impact_emoji(impact_str):
+    """Map impact string to emoji"""
+    impact_str = (impact_str or "").lower()
+    if "high" in impact_str or impact_str == "1":
+        return "🟢"  # High impact
+    return "❓"
+
 # Get API key from config
 API_KEY = config.get("economic_calendar_api_key")
 
 if API_KEY:
     events = fetch_us_economic_events(API_KEY, days=7)
-    # Filter only US and high-impact events
+    
+    # Filter only high-impact US events
     us_events = [
         ev for ev in events
         if ev.get("country") in ("US", "United States")
-           and ev.get("impact","").lower() in ("high", "high impact", "1")  # adjust based on API response
+           and ev.get("impact","").lower() in ("high", "high impact", "1")
     ]
-
-    # Prepare Telegram message
-    lines = ["<b>📰 Upcoming Major US Economic/News Events (next 7 days)</b>\n"]
+    
     if us_events:
+        # Sort by date/time
+        def parse_event_dt(ev):
+            date_str = ev.get("date") or ev.get("release_date") or ev.get("event_date")
+            time_str = ev.get("time") or "00:00"
+            try:
+                return datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+            except Exception:
+                return datetime.max
+        us_events.sort(key=parse_event_dt)
+        
+        # Limit to next 10 events
+        us_events = us_events[:10]
+        
+        # Build Telegram message
+        lines = ["<b>📰 Upcoming High-Impact US Economic/News Events (next 7 days)</b>\n"]
         for ev in us_events:
             date = ev.get("date") or ev.get("release_date") or ev.get("event_date")
-            time = ev.get("time", "")
+            time = ev.get("time") or ""
             name = ev.get("event") or ev.get("report") or ev.get("indicator")
             forecast = ev.get("consensus") or ev.get("forecast")
+            impact = impact_emoji(ev.get("impact"))
+            
             lines.append(
-                f"{date} {time} — {name}" + (f" (Forecast: {forecast})" if forecast else "")
+                f"{impact} {date} {time} — {name}" + (f" (Forecast: {forecast})" if forecast else "")
             )
     else:
-        lines.append("No high-impact US events found in the next 7 days.")
+        lines = ["<b>📰 Upcoming High-Impact US Economic/News Events (next 7 days)</b>\nNo high-impact events found."]
     
     send_telegram_message("\n".join(lines))
 else:
     send_telegram_message(
-        "<b>📰 Upcoming Major US Economic/News Events (next 7 days)</b>\n"
+        "<b>📰 Upcoming High-Impact US Economic/News Events (next 7 days)</b>\n"
         "No API key configured for economic calendar."
     )
 
@@ -798,4 +821,3 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
-
