@@ -16,6 +16,9 @@ expiry_window_days:
   min: 15
   max: 35
 
+#api key for FMP Economic data
+economic_calendar_api_key: VIn28yKxHJmdxHLUyYg66hRuMhUQ0NwJ
+
 # Plot settings
 plot:
   candle_width: 0.6
