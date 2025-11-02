@@ -182,7 +182,7 @@ except Exception as e:
 all_options = []
 
 account_data = r.profiles.load_account_profile()
-buying_power = float(account_data.get('buying_power', 0.0))
+buying_power = float(account_data.get('cash_available_for_trading', 0.0))
 
 def scan_ticker(ticker_raw, ticker_clean):
     """
@@ -587,7 +587,6 @@ try:
                 f"💰 Bid: ${best_call['Bid']:.2f}",
                 f"🔺 Delta: {abs(best_call['Delta']):.3f} | COP: {best_call['COP Short']*100:.1f}%",
                 f"📝 Max Contracts: {best_call['Max Contracts']} | Total Premium: ${best_call['Total Premium']:.2f}",
-                f"💵 Buying Power: ${buying_power:,.2f}"
             ]
             send_telegram_message("\n".join(msg_lines))
 
@@ -692,3 +691,4 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
