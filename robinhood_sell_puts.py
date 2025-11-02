@@ -386,7 +386,7 @@ def scan_ticker(ticker_raw, ticker_clean):
                 if last_low == 0:
                     continue
                 dist_from_low = (strike_price - last_low) / last_low
-                if strike_price < last_low * 0.99:
+                if dist_from_low < -0.5:
                     continue
 
                 candidate_puts.append({
@@ -733,5 +733,6 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
 
