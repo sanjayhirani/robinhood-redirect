@@ -182,7 +182,7 @@ except Exception as e:
 all_options = []
 
 account_data = r.profiles.load_account_profile()
-buying_power = float(account_data.get('cash_available_for_trading', 0.0))
+buying_power = float(account_data.get('unallocated_margin_cash', 0.0))
 
 def scan_ticker(ticker_raw, ticker_clean):
     """
@@ -691,4 +691,5 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
