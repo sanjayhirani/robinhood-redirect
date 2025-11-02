@@ -404,38 +404,31 @@ if all_options:
     )[:10]
     top_ticker_names = {t['Ticker'] for t in top_tickers}
 
-# ------------------ ALL PUT OPTIONS SUMMARY (INCLUDE ALL STRIKES) ------------------
+# ------------------ ALL PUT OPTIONS SUMMARY (WITH DELTA & TOP 5 PER TICKER) ------------------
 
 if all_options:
     summary_rows = []
 
-    # Use all candidate puts, do NOT filter by Delta or COP
+    # Collect top 5 per ticker and calculate total premium
     all_display_options = []
-    for opt in all_options:
-        max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
-        total_premium = opt['Bid Price'] * 100 * max_contracts
-        opt['Max Contracts'] = max_contracts
-        opt['Total Premium'] = total_premium
-        all_display_options.append(opt)
+    for ticker in {opt['Ticker'] for opt in all_options}:
+        ticker_opts = [opt for opt in all_options if opt['Ticker'] == ticker]
 
-    # Keep only top 5 options per ticker
-    from collections import defaultdict
-    
-    top5_per_ticker = []
-    options_by_ticker = defaultdict(list)
-    
-    for opt in all_display_options:
-        options_by_ticker[opt['Ticker']].append(opt)
-    
-    for ticker, opts in options_by_ticker.items():
-        # Sort each ticker's options by Total Premium descending
-        sorted_opts = sorted(opts, key=lambda x: x['Total Premium'], reverse=True)
-        top5_per_ticker.extend(sorted_opts[:5])  # keep only top 5
-    
-    # Use this list for building Telegram messages
-    all_display_options = top5_per_ticker
+        # Compute max contracts & total premium
+        for opt in ticker_opts:
+            max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
+            total_premium = opt['Bid Price'] * 100 * max_contracts
+            opt['Max Contracts'] = max_contracts
+            opt['Total Premium'] = total_premium
 
-    # Format each row
+        # Take top 5 by total premium for this ticker
+        top5 = sorted(ticker_opts, key=lambda x: x['Total Premium'], reverse=True)[:5]
+        all_display_options.extend(top5)
+
+    # Sort all_display_options by total premium descending overall
+    all_display_options = sorted(all_display_options, key=lambda x: x['Total Premium'], reverse=True)
+
+    # Format all rows
     for opt in all_display_options:
         exp_md = opt['Expiration Date'][5:]  # MM-DD
         summary_rows.append(
@@ -445,8 +438,8 @@ if all_options:
         )
 
     # Header
-    header = "<b>📋 All Put Options Summary — All Strikes Included</b>\n"
-    table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*50
+    header = "<b>📋 All Put Options Summary (Top 5 per Ticker)</b>\n"
+    table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*45
 
     # Split into chunks of 30 rows for Telegram
     chunk_size = 30
@@ -455,9 +448,6 @@ if all_options:
         chunk_body = "\n".join(chunk)
         msg = header + "\n<pre>" + table_header + "\n" + chunk_body + "</pre>"
         send_telegram_message(msg)
-
-# Prepare list for best alert based on all options
-top10_best_options = sorted(all_options, key=lambda x: x['Total Premium'], reverse=True)[:10]
 
 # ------------------ BEST PUT ALERT (STRICT FILTER) ------------------
 # Filter all options by COP ≥ 0.73 and abs(Delta) ≤ 0.25
@@ -702,4 +692,3 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
-
