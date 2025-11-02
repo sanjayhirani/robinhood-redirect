@@ -212,7 +212,6 @@ def scan_ticker(ticker_raw, ticker_clean):
             skipped_tickers.append({"Ticker": ticker_raw, "Reason": "Options list empty"})
             return []
 
-        # Collect candidate puts per expiration & strike
         min_days = config.get("expiry_window_days", {}).get("min", 15)
         max_days = config.get("expiry_window_days", {}).get("max", 35)
         exp_dates = sorted({opt.get('expiration_date') for opt in all_puts if opt.get('expiration_date')})
@@ -276,24 +275,56 @@ with ThreadPoolExecutor(max_workers=5) as executor:
     futures = [executor.submit(scan_ticker, t_raw, t_clean) for t_raw, t_clean in safe_tickers]
     for f in as_completed(futures):
         all_options.extend(f.result())
-        time.sleep(0.15)
+        time.sleep(0.15)  # small throttle delay to avoid API limits
 
 # ------------------ TELEGRAM ALERT FOR SKIPPED TICKERS ------------------
 if skipped_tickers:
-    msg_lines = ["⚠️ <b>Tickers Skipped in Options Scan</b>"]
+    skipped_msg_lines = ["⚠️ <b>Skipped Tickers During Options Scan</b>"]
     for s in skipped_tickers:
-        msg_lines.append(f"{s['Ticker']}: {s['Reason']}")
-    send_telegram_message("\n".join(msg_lines))
+        skipped_msg_lines.append(f"{s['Ticker']}: {s['Reason']}")
+    send_telegram_message("\n".join(skipped_msg_lines))
 
-# ------------------ ALL PUT OPTIONS SUMMARY ------------------
+# ------------------ FILTER OPTIONS GLOBALLY BY ABS(DELTA) AND COP ------------------
+all_options = [
+    opt for opt in all_options
+    if abs(opt.get('Delta', 1)) <= 0.3 and opt.get('COP Short', 0) >= 0.7
+]
 
+# ------------------ TOP OPTIONS SCORING & SELECTION ------------------
+if all_options:
+    def score(opt):
+        days_to_exp = (datetime.strptime(opt['Expiration Date'], "%Y-%m-%d").date() - today).days
+        if days_to_exp <= 0:
+            return 0
+        liquidity = 1 + 0.5 * (opt.get('Volume',0) + opt.get('Open Interest',0)) / 1000
+        max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
+        return opt['Bid Price'] * 100 * max_contracts * opt['COP Short'] * liquidity / days_to_exp
+
+    ticker_best = {}
+    for opt in all_options:
+        t = opt['Ticker']
+        sc = score(opt)
+        if t not in ticker_best or sc > ticker_best[t]['score'] or (
+            abs(sc - ticker_best[t]['score']) < 1e-6 and opt['COP Short'] > ticker_best[t]['COP Short']
+        ):
+            ticker_best[t] = {'score': sc, **opt}
+
+    top_tickers = sorted(
+        ticker_best.values(),
+        key=lambda x: (x['score'], x['COP Short']),
+        reverse=True
+    )[:10]
+    top_ticker_names = {t['Ticker'] for t in top_tickers}
+
+# ------------------ ALL PUT OPTIONS SUMMARY (EXACTLY ORIGINAL) ------------------
 if all_options:
     summary_rows = []
 
+    # Build all options table with Delta
     all_display_options = []
     for opt in all_options:
-        max_contracts = max(1, int(buying_power // (opt['Strike Price']*100)))
-        total_premium = opt['Bid Price']*100*max_contracts
+        max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
+        total_premium = opt['Bid Price'] * 100 * max_contracts
         opt['Max Contracts'] = max_contracts
         opt['Total Premium'] = total_premium
         all_display_options.append(opt)
@@ -565,4 +596,5 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
