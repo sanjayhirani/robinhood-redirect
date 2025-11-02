@@ -418,8 +418,22 @@ if all_options:
         opt['Total Premium'] = total_premium
         all_display_options.append(opt)
 
-    # Sort by total premium descending
-    all_display_options = sorted(all_display_options, key=lambda x: x['Total Premium'], reverse=True)
+    # Keep only top 5 options per ticker
+    from collections import defaultdict
+    
+    top5_per_ticker = []
+    options_by_ticker = defaultdict(list)
+    
+    for opt in all_display_options:
+        options_by_ticker[opt['Ticker']].append(opt)
+    
+    for ticker, opts in options_by_ticker.items():
+        # Sort each ticker's options by Total Premium descending
+        sorted_opts = sorted(opts, key=lambda x: x['Total Premium'], reverse=True)
+        top5_per_ticker.extend(sorted_opts[:5])  # keep only top 5
+    
+    # Use this list for building Telegram messages
+    all_display_options = top5_per_ticker
 
     # Format each row
     for opt in all_display_options:
@@ -688,3 +702,4 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
