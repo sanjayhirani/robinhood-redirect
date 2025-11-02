@@ -300,30 +300,23 @@ def scan_ticker(ticker_raw, ticker_clean):
             ]
             if not option_ids:
                 continue
+                
+            # Fetch market data per option ID to avoid 404 from bulk list
+            market_data_list = []
+            for oid in option_ids:
+                try:
+                    md_resp = r.options.get_option_market_data_by_id(oid)
+                    # md_resp could be a list or a dict
+                    if md_resp:
+                        if isinstance(md_resp, list):
+                            market_data_list.append(md_resp[0])
+                        else:
+                            market_data_list.append(md_resp)
+                except Exception:
+                    # ignore individual md failures
+                    pass
+                time.sleep(0.05)  # tiny sleep between single calls
 
-            # Attempt bulk market-data fetch, but handle None / wrong shapes
-            market_data_list = None
-            try:
-                market_data_list = r.options.get_option_market_data_by_id(option_ids)
-            except Exception:
-                market_data_list = None
-
-            # If bulk failed or returned None/unexpected shape, fetch per-id (small throttle)
-            if not market_data_list:
-                market_data_list = []
-                for oid in option_ids:
-                    try:
-                        md_resp = r.options.get_option_market_data_by_id(oid)
-                        # md_resp could be a list or a dict
-                        if md_resp:
-                            if isinstance(md_resp, list):
-                                market_data_list.append(md_resp[0])
-                            else:
-                                market_data_list.append(md_resp)
-                    except Exception:
-                        # ignore individual md failures
-                        pass
-                    time.sleep(0.05)  # tiny sleep between single calls
             else:
                 # normalize nested lists/dicts to a flat list
                 if isinstance(market_data_list, dict):
@@ -740,3 +733,4 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
