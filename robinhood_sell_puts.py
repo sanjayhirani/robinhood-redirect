@@ -191,6 +191,7 @@ def scan_ticker(ticker_raw, ticker_clean):
     - checks shapes returned by Robinhood wrapper
     - falls back to per-id market data if bulk call returns None or wrong shape
     - uses last 30 business days low (or config low_days if provided)
+    - includes far OTM strikes up to a configurable fraction (50% below current price)
     """
     ticker_results = []
     try:
@@ -284,11 +285,19 @@ def scan_ticker(ticker_raw, ticker_clean):
         exp_dates = exp_dates[:config.get("num_expirations", 4)]
 
         candidate_puts = []
+
+        # 50% far OTM config
+        max_otm_fraction = 0.5  # include puts up to 50% below current price
+        max_otm_strike = current_price * (1 - max_otm_fraction)
+
         for exp_date in exp_dates:
             puts_for_exp = [opt for opt in all_puts if opt.get('expiration_date') == exp_date]
+
+            # Filter strikes below current price but not more than 50% OTM
             strikes_below = sorted(
                 [float(opt.get('strike_price')) for opt in puts_for_exp
-                 if opt.get('strike_price') and float(opt.get('strike_price')) < current_price],
+                 if opt.get('strike_price') and float(opt.get('strike_price')) < current_price
+                 and float(opt.get('strike_price')) >= max_otm_strike],
                 reverse=True
             )
             chosen_strikes = strikes_below[1:4] if len(strikes_below) > 1 else strikes_below
@@ -300,38 +309,34 @@ def scan_ticker(ticker_raw, ticker_clean):
             ]
             if not option_ids:
                 continue
-                
+
             # Fetch market data per option ID to avoid 404 from bulk list
             market_data_list = []
             for oid in option_ids:
                 try:
                     md_resp = r.options.get_option_market_data_by_id(oid)
-                    # md_resp could be a list or a dict
                     if md_resp:
                         if isinstance(md_resp, list):
                             market_data_list.append(md_resp[0])
                         else:
                             market_data_list.append(md_resp)
                 except Exception:
-                    # ignore individual md failures
                     pass
                 time.sleep(0.05)  # tiny sleep between single calls
 
-            else:
-                # normalize nested lists/dicts to a flat list
-                if isinstance(market_data_list, dict):
-                    market_data_list = [market_data_list]
-                elif isinstance(market_data_list, list):
-                    flat = []
-                    for item in market_data_list:
-                        if isinstance(item, list):
-                            flat.extend(item)
-                        else:
-                            flat.append(item)
-                    market_data_list = flat
+            # normalize nested lists/dicts to a flat list
+            if isinstance(market_data_list, dict):
+                market_data_list = [market_data_list]
+            elif isinstance(market_data_list, list):
+                flat = []
+                for item in market_data_list:
+                    if isinstance(item, list):
+                        flat.extend(item)
+                    else:
+                        flat.append(item)
+                market_data_list = flat
 
             if not market_data_list:
-                # no market data available for this expiration/strikes
                 continue
 
             # try pairing options -> market data
@@ -339,13 +344,10 @@ def scan_ticker(ticker_raw, ticker_clean):
 
             pairs = []
             if len(market_data_list) == len(option_ids) and len(opts_selected) == len(option_ids):
-                # likely same order, zip safely
                 pairs = list(zip(opts_selected, market_data_list))
             else:
-                # build a map using possible identifier fields
                 md_map = {}
                 for md in market_data_list:
-                    # try common keys that might contain the option id
                     key = None
                     for possible_key in ('option', 'option_id', 'id'):
                         if possible_key in md and md.get(possible_key):
@@ -353,12 +355,10 @@ def scan_ticker(ticker_raw, ticker_clean):
                             break
                     if key:
                         md_map[key] = md
-                # match by opt['id']
                 for opt in opts_selected:
                     oid = opt.get('id') or opt.get('option_id')
                     if oid and (str(oid) in md_map):
                         pairs.append((opt, md_map[str(oid)]))
-                # if pairs empty but market_data_list not, fallback to zip up to min length
                 if not pairs:
                     pairs = list(zip(opts_selected, market_data_list))
 
@@ -376,19 +376,10 @@ def scan_ticker(ticker_raw, ticker_clean):
                 open_interest = int(md.get('open_interest') or 0)
                 volume = int(md.get('volume') or 0)
 
-                # safe strike -> dist calculation
                 try:
                     strike_price = float(opt.get('strike_price'))
                 except Exception:
                     continue
-
-                # avoid division by zero
-                #if last_low == 0:
-                #    continue
-                #dist_from_current = (current_price - strike_price) / current_price
-                # skip if strike is more than 50% below current price
-                #if dist_from_current > 0.5:
-                #    continue
 
                 candidate_puts.append({
                     "Ticker": ticker_raw,
@@ -406,7 +397,6 @@ def scan_ticker(ticker_raw, ticker_clean):
         return candidate_puts
 
     except Exception as e:
-        # retain your existing behavior of notifying about ticker-specific exceptions
         send_telegram_message(f"{ticker_raw} error: {e}")
         return []
 
@@ -734,6 +724,7 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
 
 
