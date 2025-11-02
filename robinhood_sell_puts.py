@@ -8,11 +8,11 @@ import yaml
 from datetime import datetime, timedelta
 import yfinance as yf
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import io
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
-
 def ensure_package(pkg_name):
     try:
         __import__(pkg_name)
@@ -23,12 +23,10 @@ for pkg in ["pandas","numpy","requests","robin_stocks","yfinance","PyYAML"]:
     ensure_package(pkg)
 
 # ------------------ LOAD CONFIG ------------------
-
 with open("config.yaml", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
 # ------------------ LOAD TICKERS ------------------
-
 TICKERS_FILE = config.get("tickers_file", "tickers.txt")
 if not os.path.exists(TICKERS_FILE):
     raise FileNotFoundError(f"{TICKERS_FILE} not found.")
@@ -37,14 +35,12 @@ TICKERS_RAW = [line.strip() for line in open(TICKERS_FILE, encoding="utf-8") if 
 TICKERS = [re.sub(r'[^A-Z0-9.-]', '', t.upper()) for t in TICKERS_RAW]
 
 # ------------------ SECRETS ------------------
-
 USERNAME = os.environ["RH_USERNAME"]
 PASSWORD = os.environ["RH_PASSWORD"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 # ------------------ TELEGRAM UTILITIES ------------------
-
 def send_telegram_message(msg):
     requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
@@ -52,13 +48,11 @@ def send_telegram_message(msg):
     )
 
 # ------------------ LOGIN ------------------
-
 r.login(USERNAME, PASSWORD)
 today = datetime.now().date()
 cutoff = today + timedelta(days=config.get("expiry_limit_days", 30))
 
 # ------------------ EARNINGS / DIVIDENDS CHECK ------------------
-
 safe_tickers = []
 risky_msgs = []
 safe_count = 0
@@ -115,7 +109,6 @@ summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {r
 send_telegram_message("\n".join(summary_lines))
 
 # ------------------ CURRENT OPEN POSITIONS ALERT ------------------
-
 try:
     positions = r.options.get_open_option_positions()
     if positions:
@@ -125,7 +118,6 @@ try:
             qty_raw = float(pos.get("quantity") or 0)
             if qty_raw == 0:
                 continue
-
             contracts = abs(int(qty_raw))
             instrument = r.helper.request_get(pos.get("option"))
             ticker = instrument.get("chain_symbol")
@@ -133,19 +125,19 @@ try:
             exp_date = pd.to_datetime(instrument.get("expiration_date")).strftime("%Y-%m-%d")
             opt_type = instrument.get("type") or instrument.get("option_type") or "put"
             opt_label = "Sell Put" if opt_type.lower() == "put" else "Sell Call"
-
             avg_price_raw = float(pos.get("average_price") or 0.0)
             md_list = r.options.get_option_market_data_by_id(instrument.get("id"))
-            md = md_list[0] if isinstance(md_list, list) and md_list else {"mark_price": 0.0}
+            if md_list:
+                md = md_list[0] if isinstance(md_list, list) else md_list
+            else:
+                md = {"mark_price": 0.0}
             md_mark_price = float(md.get("mark_price") or 0.0)
             mark_per_contract = md_mark_price * 100
             orig_pnl = abs(avg_price_raw) * contracts
             pnl_now = orig_pnl - (mark_per_contract * contracts)
             pnl_emoji = "🟢" if pnl_now >= 0.7 * orig_pnl else "🔴"
-
             latest_price_list = r.stocks.get_latest_price(ticker)
             current_price = float(latest_price_list[0]) if latest_price_list and latest_price_list[0] else 0.0
-
             msg_lines.extend([
                 f"📌 <b>{ticker}</b> | {opt_label}",
                 f"💲 Strike: ${strike:.2f}",
@@ -156,21 +148,15 @@ try:
                 f"💵 Current Profit: {pnl_emoji} ${pnl_now:.2f}",
                 "────────────────────"
             ])
-
         send_telegram_message("\n".join(msg_lines))
-
 except Exception as e:
     send_telegram_message(f"Error generating current positions alert: {e}")
 
-# ------------------ SKIPPED TICKERS TRACKING ------------------
-
-skipped_tickers = []
+# ------------------ OPTIONS SCAN ------------------
 all_options = []
-
+skipped_tickers = []
 account_data = r.profiles.load_account_profile()
 buying_power = float(account_data.get('buying_power', 0.0))
-
-# ------------------ OPTIONS SCAN FUNCTION ------------------
 
 def scan_ticker(ticker_raw, ticker_clean):
     ticker_results = []
@@ -190,197 +176,114 @@ def scan_ticker(ticker_raw, ticker_clean):
 
         df = pd.DataFrame(historicals)
         if df.empty or 'begins_at' not in df.columns:
-            skipped_tickers.append({"Ticker": ticker_raw, "Reason": "Invalid historical format"})
+            skipped_tickers.append({"Ticker": ticker_raw, "Reason": "Historical data missing 'begins_at'"})
             return []
 
         df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
         df.set_index('begins_at', inplace=True)
-        expected_cols = ['open_price','close_price','high_price','low_price','volume']
+        expected_cols = ['open_price', 'close_price', 'high_price', 'low_price', 'volume']
         if not all(c in df.columns for c in expected_cols):
-            skipped_tickers.append({"Ticker": ticker_raw, "Reason": "Missing price columns"})
+            skipped_tickers.append({"Ticker": ticker_raw, "Reason": f"Missing columns: {', '.join([c for c in expected_cols if c not in df.columns])}"})
             return []
 
         df = df[expected_cols].astype(float)
-        df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
+        df.rename(columns={'open_price': 'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
         df = df.asfreq('B').ffill()
-        low_days = int(config.get("low_days",30))
+        low_days = int(config.get("low_days", 30))
         last_low = df['low'][-low_days:].min()
-        if pd.isna(last_low) or last_low<=0:
-            skipped_tickers.append({"Ticker": ticker_raw, "Reason": "Insufficient low data"})
+        if pd.isna(last_low) or last_low <= 0:
+            skipped_tickers.append({"Ticker": ticker_raw, "Reason": "Insufficient low price data"})
             return []
 
         all_puts = r.options.find_tradable_options(ticker_clean, optionType="put")
         if not all_puts:
-            skipped_tickers.append({"Ticker": ticker_raw, "Reason": "No tradable puts"})
+            skipped_tickers.append({"Ticker": ticker_raw, "Reason": "No tradable put options"})
             return []
 
         if isinstance(all_puts, dict):
-            maybe = all_puts.get('results') or all_puts.get('options') or None
-            if isinstance(maybe,list):
+            maybe = all_puts.get('results') or all_puts.get('options')
+            if isinstance(maybe, list):
                 all_puts = maybe
             else:
-                for v in all_puts.values():
-                    if isinstance(v,list):
-                        all_puts = v
-                        break
-        if not isinstance(all_puts,list):
-            try:
-                all_puts = list(all_puts)
-            except:
-                skipped_tickers.append({"Ticker": ticker_raw, "Reason": "Cannot parse puts"})
+                skipped_tickers.append({"Ticker": ticker_raw, "Reason": "No list of options in API response"})
                 return []
 
-        min_days = config.get("expiry_window_days",{}).get("min",15)
-        max_days = config.get("expiry_window_days",{}).get("max",35)
+        if not isinstance(all_puts, list) or len(all_puts) == 0:
+            skipped_tickers.append({"Ticker": ticker_raw, "Reason": "Options list empty"})
+            return []
+
+        # Collect candidate puts per expiration & strike
+        min_days = config.get("expiry_window_days", {}).get("min", 15)
+        max_days = config.get("expiry_window_days", {}).get("max", 35)
         exp_dates = sorted({opt.get('expiration_date') for opt in all_puts if opt.get('expiration_date')})
-        exp_dates = [d for d in exp_dates if min_days <= (datetime.strptime(d,"%Y-%m-%d").date()-today).days <= max_days]
-        exp_dates = exp_dates[:config.get("num_expirations",4)]
-
-        candidate_puts = []
+        exp_dates = [d for d in exp_dates if min_days <= (datetime.strptime(d, "%Y-%m-%d").date() - today).days <= max_days]
+        exp_dates = exp_dates[:config.get("num_expirations", 4)]
         for exp_date in exp_dates:
-            puts_for_exp = [opt for opt in all_puts if opt.get('expiration_date')==exp_date]
-            strikes_below = sorted([float(opt.get('strike_price')) for opt in puts_for_exp if opt.get('strike_price') and float(opt.get('strike_price'))<current_price], reverse=True)
-            chosen_strikes = strikes_below[1:4] if len(strikes_below)>1 else strikes_below
-
+            puts_for_exp = [opt for opt in all_puts if opt.get('expiration_date') == exp_date]
+            strikes_below = sorted([float(opt.get('strike_price')) for opt in puts_for_exp if opt.get('strike_price') and float(opt.get('strike_price')) < current_price], reverse=True)
+            chosen_strikes = strikes_below[1:4] if len(strikes_below) > 1 else strikes_below
             option_ids = [opt.get('id') for opt in puts_for_exp if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes and opt.get('id')]
             if not option_ids:
                 continue
-
-            market_data_list = None
-            try:
-                market_data_list = r.options.get_option_market_data_by_id(option_ids)
-            except:
-                market_data_list = None
-
-            if not market_data_list:
-                market_data_list=[]
-                for oid in option_ids:
-                    try:
-                        md_resp = r.options.get_option_market_data_by_id(oid)
-                        if md_resp:
-                            if isinstance(md_resp,list):
-                                market_data_list.append(md_resp[0])
-                            else:
-                                market_data_list.append(md_resp)
-                    except:
-                        pass
-                    time.sleep(0.05)
-            else:
-                if isinstance(market_data_list,dict):
-                    market_data_list=[market_data_list]
-                elif isinstance(market_data_list,list):
-                    flat=[]
-                    for item in market_data_list:
-                        if isinstance(item,list):
-                            flat.extend(item)
-                        else:
-                            flat.append(item)
-                    market_data_list=flat
-
-            if not market_data_list:
-                continue
-
-            opts_selected = [opt for opt in puts_for_exp if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes]
-
-            pairs=[]
-            if len(market_data_list)==len(option_ids) and len(opts_selected)==len(option_ids):
-                pairs=list(zip(opts_selected,market_data_list))
-            else:
-                md_map={}
-                for md in market_data_list:
-                    key=None
-                    for possible_key in ('option','option_id','id'):
-                        if possible_key in md and md.get(possible_key):
-                            key=str(md.get(possible_key))
-                            break
-                    if key:
-                        md_map[key]=md
-                for opt in opts_selected:
-                    oid=opt.get('id') or opt.get('option_id')
-                    if oid and str(oid) in md_map:
-                        pairs.append((opt,md_map[str(oid)]))
-                if not pairs:
-                    pairs=list(zip(opts_selected,market_data_list))
-
-            for opt,md in pairs:
+            market_data_list = []
+            for oid in option_ids:
                 try:
-                    bid_price=float(md.get('bid_price') or md.get('mark_price') or 0.0)
+                    md_resp = r.options.get_option_market_data_by_id(oid)
+                    if md_resp:
+                        if isinstance(md_resp, list):
+                            market_data_list.append(md_resp[0])
+                        else:
+                            market_data_list.append(md_resp)
                 except:
-                    bid_price=0.0
-                if bid_price<config.get("min_price",0.10):
                     continue
-
-                delta=float(md.get('delta') or 0.0)
-                cop_short=float(md.get('chance_of_profit_short') or 0.0)
-                open_interest=int(md.get('open_interest') or 0)
-                volume=int(md.get('volume') or 0)
-                strike_price=float(opt.get('strike_price'))
-
-                if last_low==0:
+                time.sleep(0.05)
+            if not market_data_list:
+                skipped_tickers.append({"Ticker": ticker_raw, "Reason": f"No market data for expiration {exp_date}"})
+                continue
+            for opt, md in zip(puts_for_exp, market_data_list):
+                try:
+                    bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
+                    if bid_price < config.get("min_price", 0.10):
+                        continue
+                    delta = float(md.get('delta') or 0.0)
+                    cop_short = float(md.get('chance_of_profit_short') or 0.0)
+                    strike_price = float(opt.get('strike_price'))
+                    dist_from_low = (strike_price - last_low)/last_low if last_low !=0 else 0
+                    if dist_from_low < 0.01:
+                        continue
+                    ticker_results.append({
+                        "Ticker": ticker_raw,
+                        "TickerClean": ticker_clean,
+                        "Current Price": current_price,
+                        "Expiration Date": exp_date,
+                        "Strike Price": strike_price,
+                        "Bid Price": bid_price,
+                        "Delta": delta,
+                        "COP Short": cop_short
+                    })
+                except:
                     continue
-                dist_from_low=(strike_price-last_low)/last_low
-                if dist_from_low<0.01:
-                    continue
-
-                candidate_puts.append({
-                    "Ticker": ticker_raw,
-                    "TickerClean": ticker_clean,
-                    "Current Price": current_price,
-                    "Expiration Date": exp_date,
-                    "Strike Price": strike_price,
-                    "Bid Price": bid_price,
-                    "Delta": delta,
-                    "COP Short": cop_short,
-                    "Open Interest": open_interest,
-                    "Volume": volume
-                })
-
-        return candidate_puts
+        if not ticker_results:
+            skipped_tickers.append({"Ticker": ticker_raw, "Reason": "No puts passed filtering criteria"})
+        return ticker_results
 
     except Exception as e:
-        skipped_tickers.append({"Ticker": ticker_raw, "Reason": str(e)})
+        skipped_tickers.append({"Ticker": ticker_raw, "Reason": f"Exception: {str(e)}"})
         return []
 
 # ------------------ RUN PARALLELIZED SCAN ------------------
-
 with ThreadPoolExecutor(max_workers=5) as executor:
-    futures = [executor.submit(scan_ticker, t_raw, t_clean) for t_raw,t_clean in safe_tickers]
+    futures = [executor.submit(scan_ticker, t_raw, t_clean) for t_raw, t_clean in safe_tickers]
     for f in as_completed(futures):
         all_options.extend(f.result())
         time.sleep(0.15)
 
-# ------------------ TELEGRAM ALERT: SKIPPED TICKERS ------------------
-
+# ------------------ TELEGRAM ALERT FOR SKIPPED TICKERS ------------------
 if skipped_tickers:
-    msg_lines=["⚠️ <b>Tickers Skipped in Options Scan</b>"]
+    msg_lines = ["⚠️ <b>Tickers Skipped in Options Scan</b>"]
     for s in skipped_tickers:
         msg_lines.append(f"{s['Ticker']}: {s['Reason']}")
     send_telegram_message("\n".join(msg_lines))
-
-# ------------------ FILTER OPTIONS GLOBALLY BY DELTA & COP ------------------
-
-all_options=[opt for opt in all_options if abs(opt.get('Delta',1))<=0.3 and opt.get('COP Short',0)>=0.7]
-
-# ------------------ TOP OPTIONS SCORING & SELECTION ------------------
-
-if all_options:
-    def score(opt):
-        days_to_exp=(datetime.strptime(opt['Expiration Date'],"%Y-%m-%d").date()-today).days
-        if days_to_exp<=0:
-            return 0
-        liquidity=1+0.5*(opt['Volume']+opt['Open Interest'])/1000
-        max_contracts=max(1,int(buying_power//(opt['Strike Price']*100)))
-        return opt['Bid Price']*100*max_contracts*opt['COP Short']*liquidity/days_to_exp
-
-    ticker_best={}
-    for opt in all_options:
-        t=opt['Ticker']
-        sc=score(opt)
-        if t not in ticker_best or sc>ticker_best[t]['score'] or (abs(sc-ticker_best[t]['score'])<1e-6 and opt['COP Short']>ticker_best[t]['COP Short']):
-            ticker_best[t]={'score':sc,**opt}
-
-    top_tickers=sorted(ticker_best.values(),key=lambda x:(x['score'],x['COP Short']),reverse=True)[:10]
-    top_ticker_names={t['Ticker'] for t in top_tickers}
 
 # ------------------ ALL PUT OPTIONS SUMMARY ------------------
 
@@ -662,3 +565,4 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
