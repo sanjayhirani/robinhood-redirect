@@ -180,7 +180,6 @@ except Exception as e:
 
 # ------------------ OPTIONS SCAN (PARALLELIZED WITH THROTTLE) ------------------
 all_options = []
-skipped_tickers = []
 
 account_data = r.profiles.load_account_profile()
 buying_power = float(account_data.get('buying_power', 0.0))
@@ -188,63 +187,71 @@ buying_power = float(account_data.get('buying_power', 0.0))
 def scan_ticker(ticker_raw, ticker_clean):
     """
     Robust per-ticker scanner:
-    - returns candidate puts
-    - tracks skip reason if no puts selected
+    - handles missing historicals
+    - checks shapes returned by Robinhood wrapper
+    - falls back to per-id market data if bulk call returns None or wrong shape
+    - uses last 30 business days low (or config low_days if provided)
     """
-    candidate_puts = []
-    skip_reason = None
+    ticker_results = []
     try:
-        # latest price
+        # latest price (guard if API returns None or empty)
         latest_price = r.stocks.get_latest_price(ticker_clean)
         if not latest_price or latest_price[0] is None:
-            return [], "no latest price"
-
+            return []
         current_price = float(latest_price[0])
 
-        # historicals
+        # historicals (guard if None or empty)
         historicals = r.stocks.get_stock_historicals(
             ticker_clean, interval='day', span='month', bounds='regular'
         )
         if not historicals:
-            return [], "no historical data"
+            return []
 
         df = pd.DataFrame(historicals)
         if df.empty or 'begins_at' not in df.columns:
-            return [], "invalid historical data"
+            return []
 
+        # datetime index
         df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
         df.set_index('begins_at', inplace=True)
 
+        # ensure expected price columns exist
         expected_cols = ['open_price', 'close_price', 'high_price', 'low_price', 'volume']
         if not all(c in df.columns for c in expected_cols):
-            return [], "missing columns in historicals"
+            return []
 
         df = df[expected_cols].astype(float)
+
+        # proper rename to short names (fixes previous 'low' KeyError)
         df.rename(columns={
             'open_price': 'open',
             'close_price': 'close',
             'high_price': 'high',
             'low_price': 'low'
         }, inplace=True)
+
+        # forward-fill business days
         df = df.asfreq('B').ffill()
 
-        # last low
+        # use last 30 days (or config override)
         low_days = int(config.get("low_days", 30))
         last_low = df['low'][-low_days:].min()
         if pd.isna(last_low) or last_low <= 0:
-            return [], "insufficient low data"
+            # insufficient low data — skip this ticker silently
+            return []
 
-        # find tradable puts
+        # find tradable puts (handle None/different shapes)
         all_puts = r.options.find_tradable_options(ticker_clean, optionType="put")
         if not all_puts:
-            return [], "no options returned"
+            return []
 
-        # normalize all_puts if dict
+        # normalize all_puts if API returned a dict structure
         if isinstance(all_puts, dict):
             maybe = all_puts.get('results') or all_puts.get('options') or None
             if isinstance(maybe, list):
                 all_puts = maybe
             else:
+                # try to find a list inside the dict values
                 found = False
                 for v in all_puts.values():
                     if isinstance(v, list):
@@ -252,29 +259,31 @@ def scan_ticker(ticker_raw, ticker_clean):
                         found = True
                         break
                 if not found:
-                    return [], "no options returned"
-
+                    return []
+        # ensure iterable
         if not isinstance(all_puts, list):
             try:
                 all_puts = list(all_puts)
             except Exception:
-                return [], "options not iterable"
+                return []
 
-        # min/max expiration
+        # Get min/max from config
         min_days = config.get("expiry_window_days", {}).get("min", 15)
         max_days = config.get("expiry_window_days", {}).get("max", 35)
-
+        
+        # Collect expiration dates
         exp_dates = sorted({opt.get('expiration_date') for opt in all_puts if opt.get('expiration_date')})
+        
+        # Keep only expirations within the 15-35 day window
         exp_dates = [
             d for d in exp_dates
             if min_days <= (datetime.strptime(d, "%Y-%m-%d").date() - today).days <= max_days
         ]
+        
+        # Limit to configured number of expirations per ticker
         exp_dates = exp_dates[:config.get("num_expirations", 4)]
 
-        if not exp_dates:
-            return [], "no expirations in window"
-
-        # scan candidate puts
+        candidate_puts = []
         for exp_date in exp_dates:
             puts_for_exp = [opt for opt in all_puts if opt.get('expiration_date') == exp_date]
             strikes_below = sorted(
@@ -284,6 +293,7 @@ def scan_ticker(ticker_raw, ticker_clean):
             )
             chosen_strikes = strikes_below[1:4] if len(strikes_below) > 1 else strikes_below
 
+            # option ids for chosen strikes
             option_ids = [
                 opt.get('id') for opt in puts_for_exp
                 if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes and opt.get('id')
@@ -291,27 +301,31 @@ def scan_ticker(ticker_raw, ticker_clean):
             if not option_ids:
                 continue
 
-            # bulk market data fetch
+            # Attempt bulk market-data fetch, but handle None / wrong shapes
             market_data_list = None
             try:
                 market_data_list = r.options.get_option_market_data_by_id(option_ids)
             except Exception:
                 market_data_list = None
 
+            # If bulk failed or returned None/unexpected shape, fetch per-id (small throttle)
             if not market_data_list:
                 market_data_list = []
                 for oid in option_ids:
                     try:
                         md_resp = r.options.get_option_market_data_by_id(oid)
+                        # md_resp could be a list or a dict
                         if md_resp:
                             if isinstance(md_resp, list):
                                 market_data_list.append(md_resp[0])
                             else:
                                 market_data_list.append(md_resp)
                     except Exception:
+                        # ignore individual md failures
                         pass
-                    time.sleep(0.05)
+                    time.sleep(0.05)  # tiny sleep between single calls
             else:
+                # normalize nested lists/dicts to a flat list
                 if isinstance(market_data_list, dict):
                     market_data_list = [market_data_list]
                 elif isinstance(market_data_list, list):
@@ -324,15 +338,21 @@ def scan_ticker(ticker_raw, ticker_clean):
                     market_data_list = flat
 
             if not market_data_list:
+                # no market data available for this expiration/strikes
                 continue
 
+            # try pairing options -> market data
             opts_selected = [opt for opt in puts_for_exp if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes]
+
             pairs = []
             if len(market_data_list) == len(option_ids) and len(opts_selected) == len(option_ids):
+                # likely same order, zip safely
                 pairs = list(zip(opts_selected, market_data_list))
             else:
+                # build a map using possible identifier fields
                 md_map = {}
                 for md in market_data_list:
+                    # try common keys that might contain the option id
                     key = None
                     for possible_key in ('option', 'option_id', 'id'):
                         if possible_key in md and md.get(possible_key):
@@ -340,13 +360,16 @@ def scan_ticker(ticker_raw, ticker_clean):
                             break
                     if key:
                         md_map[key] = md
+                # match by opt['id']
                 for opt in opts_selected:
                     oid = opt.get('id') or opt.get('option_id')
                     if oid and (str(oid) in md_map):
                         pairs.append((opt, md_map[str(oid)]))
+                # if pairs empty but market_data_list not, fallback to zip up to min length
                 if not pairs:
                     pairs = list(zip(opts_selected, market_data_list))
 
+            # iterate pairs and apply filters (bid, delta, COP, dist_from_low)
             for opt, md in pairs:
                 try:
                     bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
@@ -360,11 +383,13 @@ def scan_ticker(ticker_raw, ticker_clean):
                 open_interest = int(md.get('open_interest') or 0)
                 volume = int(md.get('volume') or 0)
 
+                # safe strike -> dist calculation
                 try:
                     strike_price = float(opt.get('strike_price'))
                 except Exception:
                     continue
 
+                # avoid division by zero
                 if last_low == 0:
                     continue
                 dist_from_low = (strike_price - last_low) / last_low
@@ -384,30 +409,19 @@ def scan_ticker(ticker_raw, ticker_clean):
                     "Volume": volume
                 })
 
-        if not candidate_puts:
-            skip_reason = "options returned but filtered out or insufficient market data"
-
-        return candidate_puts, skip_reason
+        return candidate_puts
 
     except Exception as e:
-        return [], f"error: {e}"
+        # retain your existing behavior of notifying about ticker-specific exceptions
+        send_telegram_message(f"{ticker_raw} error: {e}")
+        return []
 
 # ------------------ RUN PARALLELIZED SCAN ------------------
 with ThreadPoolExecutor(max_workers=5) as executor:
-    futures = {executor.submit(scan_ticker, t_raw, t_clean): (t_raw, t_clean) for t_raw, t_clean in safe_tickers}
-
+    futures = [executor.submit(scan_ticker, t_raw, t_clean) for t_raw, t_clean in safe_tickers]
     for f in as_completed(futures):
-        t_raw, t_clean = futures[f]
-        result, reason = f.result()
-        all_options.extend(result)
-        if not result and reason:
-            skipped_tickers.append(f"{t_raw} — {reason}")
-        time.sleep(0.15)  # throttle to avoid API limits
-
-# Send Telegram alert for skipped tickers
-if skipped_tickers:
-    skipped_msg = "<b>⚠️ Skipped Tickers</b>\n" + "\n".join(skipped_tickers)
-    send_telegram_message(skipped_msg)
+        all_options.extend(f.result())
+        time.sleep(0.15)  # small throttle delay to avoid API limits
 
 # ------------------ FILTER OPTIONS GLOBALLY BY ABS(DELTA) AND COP ------------------
 all_options = [
@@ -726,4 +740,3 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
-
