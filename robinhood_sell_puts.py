@@ -189,19 +189,18 @@ def scan_ticker(ticker_raw, ticker_clean):
     Robust per-ticker scanner:
     - handles missing historicals
     - checks shapes returned by Robinhood wrapper
-    - falls back to per-id market data if bulk call returns None or wrong shape
-    - uses last 30 business days low (or config low_days if provided)
-    - includes far OTM strikes up to a configurable fraction (50% below current price)
+    - uses last 30 business days low
+    - includes far OTM strikes up to 50% below current price
+    - skips the first strike below current price
     """
     ticker_results = []
     try:
-        # latest price (guard if API returns None or empty)
         latest_price = r.stocks.get_latest_price(ticker_clean)
         if not latest_price or latest_price[0] is None:
             return []
         current_price = float(latest_price[0])
 
-        # historicals (guard if None or empty)
+        # historicals
         historicals = r.stocks.get_stock_historicals(
             ticker_clean, interval='day', span='month', bounds='regular'
         )
@@ -212,47 +211,32 @@ def scan_ticker(ticker_raw, ticker_clean):
         if df.empty or 'begins_at' not in df.columns:
             return []
 
-        # datetime index
         df['begins_at'] = pd.to_datetime(df['begins_at']).dt.tz_localize(None)
         df.set_index('begins_at', inplace=True)
 
-        # ensure expected price columns exist
         expected_cols = ['open_price', 'close_price', 'high_price', 'low_price', 'volume']
         if not all(c in df.columns for c in expected_cols):
             return []
 
         df = df[expected_cols].astype(float)
-
-        # proper rename to short names (fixes previous 'low' KeyError)
-        df.rename(columns={
-            'open_price': 'open',
-            'close_price': 'close',
-            'high_price': 'high',
-            'low_price': 'low'
-        }, inplace=True)
-
-        # forward-fill business days
+        df.rename(columns={'open_price':'open','close_price':'close','high_price':'high','low_price':'low'}, inplace=True)
         df = df.asfreq('B').ffill()
 
-        # use last 30 days (or config override)
         low_days = int(config.get("low_days", 30))
         last_low = df['low'][-low_days:].min()
         if pd.isna(last_low) or last_low <= 0:
-            # insufficient low data — skip this ticker silently
             return []
 
-        # find tradable puts (handle None/different shapes)
+        # get tradable puts
         all_puts = r.options.find_tradable_options(ticker_clean, optionType="put")
         if not all_puts:
             return []
 
-        # normalize all_puts if API returned a dict structure
         if isinstance(all_puts, dict):
             maybe = all_puts.get('results') or all_puts.get('options') or None
             if isinstance(maybe, list):
                 all_puts = maybe
             else:
-                # try to find a list inside the dict values
                 found = False
                 for v in all_puts.values():
                     if isinstance(v, list):
@@ -261,48 +245,35 @@ def scan_ticker(ticker_raw, ticker_clean):
                         break
                 if not found:
                     return []
-        # ensure iterable
         if not isinstance(all_puts, list):
             try:
                 all_puts = list(all_puts)
             except Exception:
                 return []
 
-        # Get min/max from config
         min_days = config.get("expiry_window_days", {}).get("min", 15)
         max_days = config.get("expiry_window_days", {}).get("max", 35)
-        
-        # Collect expiration dates
         exp_dates = sorted({opt.get('expiration_date') for opt in all_puts if opt.get('expiration_date')})
-        
-        # Keep only expirations within the 15-35 day window
-        exp_dates = [
-            d for d in exp_dates
-            if min_days <= (datetime.strptime(d, "%Y-%m-%d").date() - today).days <= max_days
-        ]
-        
-        # Limit to configured number of expirations per ticker
+        exp_dates = [d for d in exp_dates if min_days <= (datetime.strptime(d, "%Y-%m-%d").date() - today).days <= max_days]
         exp_dates = exp_dates[:config.get("num_expirations", 4)]
 
         candidate_puts = []
 
-        # 50% far OTM config
         max_otm_fraction = 0.5  # include puts up to 50% below current price
         max_otm_strike = current_price * (1 - max_otm_fraction)
 
         for exp_date in exp_dates:
             puts_for_exp = [opt for opt in all_puts if opt.get('expiration_date') == exp_date]
 
-            # Filter strikes below current price but not more than 50% OTM
+            # ----------------- CHANGED: skip first strike below current price -----------------
             strikes_below = sorted(
                 [float(opt.get('strike_price')) for opt in puts_for_exp
                  if opt.get('strike_price') and float(opt.get('strike_price')) < current_price
                  and float(opt.get('strike_price')) >= max_otm_strike],
                 reverse=True
             )
-            chosen_strikes = strikes_below[1:4] if len(strikes_below) > 1 else strikes_below
+            chosen_strikes = strikes_below[1:] if len(strikes_below) > 1 else []  # skip first
 
-            # option ids for chosen strikes
             option_ids = [
                 opt.get('id') for opt in puts_for_exp
                 if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes and opt.get('id')
@@ -310,21 +281,16 @@ def scan_ticker(ticker_raw, ticker_clean):
             if not option_ids:
                 continue
 
-            # Fetch market data per option ID to avoid 404 from bulk list
             market_data_list = []
             for oid in option_ids:
                 try:
                     md_resp = r.options.get_option_market_data_by_id(oid)
                     if md_resp:
-                        if isinstance(md_resp, list):
-                            market_data_list.append(md_resp[0])
-                        else:
-                            market_data_list.append(md_resp)
+                        market_data_list.append(md_resp[0] if isinstance(md_resp, list) else md_resp)
                 except Exception:
                     pass
-                time.sleep(0.05)  # tiny sleep between single calls
+                time.sleep(0.05)
 
-            # normalize nested lists/dicts to a flat list
             if isinstance(market_data_list, dict):
                 market_data_list = [market_data_list]
             elif isinstance(market_data_list, list):
@@ -339,7 +305,6 @@ def scan_ticker(ticker_raw, ticker_clean):
             if not market_data_list:
                 continue
 
-            # try pairing options -> market data
             opts_selected = [opt for opt in puts_for_exp if opt.get('strike_price') and float(opt.get('strike_price')) in chosen_strikes]
 
             pairs = []
@@ -362,7 +327,6 @@ def scan_ticker(ticker_raw, ticker_clean):
                 if not pairs:
                     pairs = list(zip(opts_selected, market_data_list))
 
-            # iterate pairs and apply filters (bid, delta, COP, dist_from_low)
             for opt, md in pairs:
                 try:
                     bid_price = float(md.get('bid_price') or md.get('mark_price') or 0.0)
@@ -440,12 +404,12 @@ if all_options:
     )[:10]
     top_ticker_names = {t['Ticker'] for t in top_tickers}
 
-# ------------------ ALL PUT OPTIONS SUMMARY (WITH DELTA) ------------------
+# ------------------ ALL PUT OPTIONS SUMMARY (INCLUDE ALL STRIKES) ------------------
 
 if all_options:
     summary_rows = []
 
-    # Build all options table with Delta
+    # Use all candidate puts, do NOT filter by Delta or COP
     all_display_options = []
     for opt in all_options:
         max_contracts = max(1, int(buying_power // (opt['Strike Price'] * 100)))
@@ -454,10 +418,10 @@ if all_options:
         opt['Total Premium'] = total_premium
         all_display_options.append(opt)
 
-    # Sort all options by total premium descending
+    # Sort by total premium descending
     all_display_options = sorted(all_display_options, key=lambda x: x['Total Premium'], reverse=True)
 
-    # Format all rows
+    # Format each row
     for opt in all_display_options:
         exp_md = opt['Expiration Date'][5:]  # MM-DD
         summary_rows.append(
@@ -467,10 +431,10 @@ if all_options:
         )
 
     # Header
-    header = "<b>📋 All Put Options Summary</b>\n"
-    table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*45
+    header = "<b>📋 All Put Options Summary — All Strikes Included</b>\n"
+    table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*50
 
-    # Split into chunks of 30 rows
+    # Split into chunks of 30 rows for Telegram
     chunk_size = 30
     for i in range(0, len(summary_rows), chunk_size):
         chunk = summary_rows[i:i+chunk_size]
@@ -724,9 +688,3 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
-
-
-
-
-
-
