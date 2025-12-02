@@ -145,8 +145,8 @@ for ticker_raw, ticker_clean in safe_tickers:
             monthly_high = hist_month['High'].max()
             current_price = hist_month['Close'][-1]
             drop_pct = (monthly_high - current_price) / monthly_high
-            if drop_pct < 0.10 or drop_pct > 0.20:
-                reasons.append("Not 10-20% below monthly high")
+            if drop_pct < 0.10:
+                reasons.append("Less than 10% below monthly high")
 
             delta = hist_month['Close'].diff()
             gain = delta.clip(lower=0)
@@ -757,4 +757,5 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
