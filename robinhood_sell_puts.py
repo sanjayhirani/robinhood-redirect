@@ -178,118 +178,6 @@ try:
 except Exception as e:
     send_telegram_message(f"Error generating current positions alert: {e}")
 
-# ------------------ FUNDAMENTAL & TREND FILTERS (365d trend, PE, 10–20% below monthly high, monthly RSI < 40) ------------------
-
-ticker_filters = {}
-
-for ticker_raw, ticker_clean in zip(TICKERS_RAW, TICKERS):
-    try:
-        stock = yf.Ticker(ticker_clean)
-
-        # ----- 365-day trend -----
-        hist_365 = stock.history(period="1y")
-        if hist_365.empty:
-            continue
-        price_now = hist_365["Close"][-1]
-        price_1yr_ago = hist_365["Close"][0]
-        upward_trend = price_now > price_1yr_ago
-
-        # ----- PE Ratio -----
-        pe_ratio = stock.info.get("trailingPE", None)
-        pe_ok = pe_ratio is not None and pe_ratio < 100
-
-        # ----- 30-day (monthly) high -----
-        hist_30 = stock.history(period="30d")
-        if hist_30.empty:
-            continue
-        monthly_high = hist_30["High"].max()
-        pct_from_monthly_high = price_now / monthly_high
-        between_10_20 = (0.80 <= pct_from_monthly_high <= 0.90)
-
-        # ----- Monthly RSI (30-day) -----
-        delta = hist_30['Close'].diff()
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-        avg_gain = gain.rolling(30).mean()
-        avg_loss = loss.rolling(30).mean()
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100/(1+rs))
-        monthly_rsi = float(rsi[-1]) if not pd.isna(rsi[-1]) else None
-        rsi_ok = monthly_rsi is not None and monthly_rsi < 40
-
-        ticker_filters[ticker_clean] = {
-            "trend_ok": upward_trend,
-            "pe_ok": pe_ok,
-            "between_10_20": between_10_20,
-            "rsi_ok": rsi_ok
-        }
-
-# ------------------ Build Diagnostic Messages for Failed Tickers (Detailed) ------------------
-
-failed_ticker_messages = []
-
-for ticker_raw, ticker_clean in zip(TICKERS_RAW, TICKERS):
-    f = ticker_filters.get(ticker_clean)
-    if not f:
-        failed_ticker_messages.append(f"❌ <b>{ticker_raw}</b> — no data available")
-        continue
-
-    failures = []
-    extra = []
-
-    # Trend failure
-    if not f["trend_ok"]:
-        failures.append("Not in 365-day upward trend 📉")
-
-    # PE failure
-    pe_ratio = yf.Ticker(ticker_clean).info.get("trailingPE", None)
-    if not f["pe_ok"]:
-        failures.append("PE ≥ 100 📊")
-    if pe_ratio is not None:
-        extra.append(f"PE: <b>{round(pe_ratio,2)}</b>")
-
-    # Monthly high % failure  
-    hist_30 = yf.Ticker(ticker_clean).history(period="30d")
-    if not hist_30.empty:
-        monthly_high = hist_30["High"].max()
-        price_now = hist_30["Close"][-1]
-        pct_from_monthly_high = price_now / monthly_high * 100
-        extra.append(f"% of Monthly High: <b>{pct_from_monthly_high:.1f}%</b>")
-        if not f["between_10_20"]:
-            failures.append("Not 10–20% below monthly high 📅")
-
-    # RSI failure
-    hist_30_close = hist_30["Close"] if not hist_30.empty else None
-    if hist_30_close is not None:
-        delta = hist_30_close.diff()
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-        avg_gain = gain.rolling(30).mean()
-        avg_loss = loss.rolling(30).mean()
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-        monthly_rsi = float(rsi[-1]) if not pd.isna(rsi[-1]) else None
-    else:
-        monthly_rsi = None
-
-    if monthly_rsi is not None:
-        extra.append(f"RSI: <b>{monthly_rsi:.1f}</b>")
-    if not f["rsi_ok"]:
-        failures.append("RSI ≥ 40 ⚠️")
-
-    # Build message
-    if failures:
-        detail_block = "; ".join(failures)
-        extras = " | ".join(extra)
-        failed_ticker_messages.append(
-            f"❌ <b>{ticker_raw}</b>\n"
-            f"• {detail_block}\n"
-            f"• {extras}"
-        )
-        
-    except Exception:
-        continue
-
 # ------------------ OPTIONS SCAN (PARALLELIZED WITH THROTTLE) ------------------
 all_options = []
 
@@ -486,12 +374,7 @@ with ThreadPoolExecutor(max_workers=5) as executor:
 # ------------------ FILTER OPTIONS GLOBALLY BY ABS(DELTA) AND COP ------------------
 all_options = [
     opt for opt in all_options
-    if abs(opt.get('Delta', 1)) <= 0.3
-       and opt.get('COP Short', 0) >= 0.7
-       and ticker_filters.get(opt["TickerClean"], {}).get("trend_ok")
-       and ticker_filters.get(opt["TickerClean"], {}).get("pe_ok")
-       and ticker_filters.get(opt["TickerClean"], {}).get("between_10_20")
-       and ticker_filters.get(opt["TickerClean"], {}).get("rsi_ok")
+    if abs(opt.get('Delta', 1)) <= 0.3 and opt.get('COP Short', 0) >= 0.7
 ]
 
 # ------------------ TOP OPTIONS SCORING & SELECTION ------------------
@@ -520,21 +403,6 @@ if all_options:
         reverse=True
     )[:10]
     top_ticker_names = {t['Ticker'] for t in top_tickers}
-
-# ---------------------------- FILTERED TICKERS ----------------------------
-
-# ------------------ NEW TELEGRAM ALERT: FILTERED TICKERS (Detailed) ------------------
-
-if failed_ticker_messages:
-    msg = (
-        "🚫 <b>Tickers Filtered Out</b>\n"
-        "These tickers did <u>not</u> meet initial filters:\n\n" +
-        "\n\n".join(failed_ticker_messages)
-    )
-else:
-    msg = "✅ All tickers passed initial filtering."
-
-send_telegram_message(msg)
 
 # ------------------ ALL PUT OPTIONS SUMMARY (WITH DELTA & TOP 5 PER TICKER) ------------------
 
@@ -585,12 +453,7 @@ if all_options:
 # Filter all options by COP ≥ 0.73 and abs(Delta) ≤ 0.25
 eligible_options = [
     opt for opt in all_options
-    if opt['COP Short'] >= 0.73
-       and abs(opt['Delta']) <= 0.25
-       and ticker_filters.get(opt["TickerClean"], {}).get("trend_ok")
-       and ticker_filters.get(opt["TickerClean"], {}).get("pe_ok")
-       and ticker_filters.get(opt["TickerClean"], {}).get("between_10_20")
-       and ticker_filters.get(opt["TickerClean"], {}).get("rsi_ok")
+    if opt['COP Short'] >= 0.73 and abs(opt['Delta']) <= 0.25
 ]
 
 if eligible_options:
