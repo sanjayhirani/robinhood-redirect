@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 import yfinance as yf
 import re
 import io
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 # ------------------ AUTO-INSTALL DEPENDENCIES ------------------
 
@@ -116,8 +118,72 @@ if safe_tickers:
 summary_lines.append(f"\n📊 Summary: ✅ Safe: {safe_count} | ⚠️ Risky: {risky_count}")
 send_telegram_message("\n".join(summary_lines))
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
+# ------------------ NEW FILTER: SAFE TICKERS BASED ON TREND / PE / MONTHLY HIGH / RSI ------------------
+
+filtered_out_msgs = []
+filtered_safe_tickers = []
+
+for ticker_raw, ticker_clean in safe_tickers:
+    reasons = []
+    try:
+        stock = yf.Ticker(ticker_clean)
+        hist_365 = stock.history(period="365d", interval="1d")
+        if hist_365.empty or 'Close' not in hist_365.columns:
+            reasons.append("No 365d data")
+        else:
+            if hist_365['Close'][-1] < hist_365['Close'][0]:
+                reasons.append("Downtrend")
+
+        pe = stock.info.get("trailingPE") or stock.info.get("forwardPE")
+        if pe is None or pe > 100:
+            reasons.append("PE>100")
+
+        hist_month = stock.history(period="30d", interval="1d")
+        if hist_month.empty or 'High' not in hist_month.columns:
+            reasons.append("No monthly data")
+        else:
+            monthly_high = hist_month['High'].max()
+            current_price = hist_month['Close'][-1]
+            drop_pct = (monthly_high - current_price) / monthly_high
+            if drop_pct < 0.10 or drop_pct > 0.20:
+                reasons.append("Not 10-20% below monthly high")
+
+            delta = hist_month['Close'].diff()
+            gain = delta.clip(lower=0)
+            loss = -delta.clip(upper=0)
+            period = len(hist_month)
+            avg_gain = gain.rolling(window=period, min_periods=period).mean()
+            avg_loss = loss.rolling(window=period, min_periods=period).mean()
+            avg_gain.iloc[period-1] = gain.iloc[:period].mean()
+            avg_loss.iloc[period-1] = loss.iloc[:period].mean()
+            for i in range(period, len(avg_gain)):
+                avg_gain.iloc[i] = (avg_gain.iloc[i-1]*(period-1) + gain.iloc[i])/period
+                avg_loss.iloc[i] = (avg_loss.iloc[i-1]*(period-1) + loss.iloc[i])/period
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+            rsi_latest = rsi[-1] if not pd.isna(rsi[-1]) else None
+            if rsi_latest is None or rsi_latest >= 40:
+                reasons.append("RSI≥40")
+
+        if reasons:
+            msg_line = f"{ticker_raw[:5]:<5} | {', '.join(reasons)[:43]}"
+            filtered_out_msgs.append(msg_line)
+        else:
+            filtered_safe_tickers.append((ticker_raw, ticker_clean))
+
+    except Exception as e:
+        msg_line = f"{ticker_raw[:5]:<5} | Err:{str(e)[:43]}"
+        filtered_out_msgs.append(msg_line)
+
+# Send filtered tickers alert
+if filtered_out_msgs:
+    header = "<b>⚠️ Filtered Tickers & Reasons</b>\n<pre>"
+    table_header = f"{'Tkr':<5}|Reason(s)\n" + "-"*50
+    body = "\n".join(filtered_out_msgs)
+    send_telegram_message(header + table_header + "\n" + body + "</pre>")
+
+# Update safe_tickers for rest of the script
+safe_tickers = filtered_safe_tickers
 
 # ------------------ CURRENT OPEN POSITIONS ALERT (Sell Calls & Puts) ------------------
 try:
@@ -691,3 +757,4 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
