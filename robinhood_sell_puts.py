@@ -549,7 +549,9 @@ else:
 # ------------------ OWNED TICKERS SELL CALLS SUMMARY (SORTED BY TOTAL PREMIUM) ------------------
 try:
     holdings = r.build_holdings()
-    owned_tickers = [(symbol.upper(), symbol.upper()) for symbol, data in holdings.items() if float(data.get("quantity", 0)) >= 100]
+    # Only tickers with ≥100 shares, store ticker + shares owned
+    owned_tickers = [(symbol.upper(), symbol.upper(), int(float(data.get("quantity", 0)))) 
+                     for symbol, data in holdings.items() if float(data.get("quantity", 0)) >= 100]
 
     if not owned_tickers:
         send_telegram_message("⚠️ No owned tickers with ≥100 shares for sell calls.")
@@ -557,7 +559,7 @@ try:
         all_calls = []
         buying_power = float(r.profiles.load_account_profile().get('buying_power', 0))
 
-        for ticker_raw, ticker_clean in owned_tickers:
+        for ticker_raw, ticker_clean, shares_owned in owned_tickers:
             try:
                 calls = r.options.find_tradable_options(ticker_clean, optionType="call")
                 if not calls:
@@ -599,7 +601,12 @@ try:
                     delta = float(md.get("delta") or 0)
                     cop_short = float(md.get("chance_of_profit_short") or 0)
                     strike = float(opt.get("strike_price") or 0)
-                    max_contracts = max(1, int(buying_power // (strike*100)))
+
+                    # ---------------- CAP MAX CONTRACTS BASED ON OWNED SHARES ----------------
+                    max_contracts = min(shares_owned // 100, int(buying_power // (strike * 100)))
+                    if max_contracts <= 0:
+                        continue
+
                     total_premium = bid_price * 100 * max_contracts
 
                     all_calls.append({
@@ -623,7 +630,7 @@ try:
             # Sort descending by Total Premium
             eligible_calls = sorted(eligible_calls, key=lambda x: x['Total Premium'], reverse=True)
 
-            # Format all calls summary (matching sell puts table)
+            # Format all calls summary
             summary_rows = []
             for c in eligible_calls:
                 exp_md = c['Expiration'][5:]  # MM-DD
@@ -633,26 +640,26 @@ try:
                     f"{c['Max Contracts']:<2}|${c['Total Premium']:<5.0f}"
                 )
 
-            header = "<b>📋 All Sell Calls Summary — Owned Tickers</b>\n"
+            header = "📋 All Sell Calls Summary — Owned Tickers (Capped by Shares)\n"
             table_header = f"{'Tkr':<5}|{'Exp':<5}|{'Strk':<6}|{'Bid':<4}|{'Δ':<5}|{'COP%':<5}|{'Ct':<2}|{'Prem':<5}\n" + "-"*50
 
             chunk_size = 30
             for i in range(0, len(summary_rows), chunk_size):
                 chunk = summary_rows[i:i+chunk_size]
                 chunk_body = "\n".join(chunk)
-                msg = header + "\n<pre>" + table_header + "\n" + chunk_body + "</pre>"
+                msg = header + "\n" + table_header + "\n" + chunk_body
                 send_telegram_message(msg)
 
             # ------------------ BEST SELL CALL ALERT ------------------
             best_call = eligible_calls[0]  # top after sorting
             msg_lines = [
-                "🔥 <b>Best Sell Call</b>",
+                "🔥 Best Sell Call",
                 "",
-                f"📊 {best_call['Ticker']} Strike: ${best_call['Strike']:.2f}",
-                f"✅ Expiration: {best_call['Expiration']}",
-                f"💰 Bid: ${best_call['Bid']:.2f}",
-                f"🔺 Delta: {abs(best_call['Delta']):.3f} | COP: {best_call['COP Short']*100:.1f}%",
-                f"📝 Max Contracts: {best_call['Max Contracts']} | Total Premium: ${best_call['Total Premium']:.2f}",
+                f"{best_call['Ticker']} Strike: ${best_call['Strike']:.2f}",
+                f"Expiration: {best_call['Expiration']}",
+                f"Bid: ${best_call['Bid']:.2f}",
+                f"Delta: {abs(best_call['Delta']):.3f} | COP: {best_call['COP Short']*100:.1f}%",
+                f"Max Contracts: {best_call['Max Contracts']} | Total Premium: ${best_call['Total Premium']:.2f}",
             ]
             send_telegram_message("\n".join(msg_lines))
 
@@ -757,5 +764,6 @@ table_lines.append("</pre>")
 
 # Send Telegram alert
 send_telegram_message("\n".join(table_lines))
+
 
 
